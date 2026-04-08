@@ -127,7 +127,12 @@ def _build_result(
     )
 
 
-def _simple_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) -> ConsensusResult:
+def _simple_majority(
+    candidates: list[AgentOutput],
+    *,
+    mode: ConsensusMode,
+    unstable_threshold: float,
+) -> ConsensusResult:
     groups = _group_candidates(candidates)
     if not groups:
         raise ValueError("resolve_consensus() requires at least one candidate")
@@ -139,7 +144,8 @@ def _simple_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) -> C
         key=lambda group: (group.count, group.confidence_sum, -group.first_index),
     )
     score = winner.count / len(candidates)
-    unstable = winner.count == 1 and len(candidates) > 1
+    singleton_consensus = winner.count == 1 and len(candidates) > 1
+    unstable = score < unstable_threshold or singleton_consensus
     rationale = "majority vote"
     if unstable:
         rationale = "no repeated answer reached the majority threshold"
@@ -154,7 +160,12 @@ def _simple_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) -> C
     )
 
 
-def _weighted_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) -> ConsensusResult:
+def _weighted_majority(
+    candidates: list[AgentOutput],
+    *,
+    mode: ConsensusMode,
+    unstable_threshold: float,
+) -> ConsensusResult:
     groups = _group_candidates(candidates)
     if not groups:
         raise ValueError("resolve_consensus() requires at least one candidate")
@@ -167,7 +178,8 @@ def _weighted_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) ->
     )
     total_weight = sum(group.confidence_sum for group in groups) or 1.0
     score = winner.confidence_sum / total_weight
-    unstable = winner.count == 1 and len(candidates) > 1
+    singleton_consensus = winner.count == 1 and len(candidates) > 1
+    unstable = score < unstable_threshold or singleton_consensus
     rationale = "confidence-weighted majority"
     if unstable:
         rationale = "no repeated answer carried enough support to be considered stable"
@@ -339,9 +351,9 @@ def resolve_consensus(
     """
 
     if mode == "simple_majority":
-        return _simple_majority(candidates, mode=mode)
+        return _simple_majority(candidates, mode=mode, unstable_threshold=unstable_threshold)
     if mode == "weighted_majority":
-        return _weighted_majority(candidates, mode=mode)
+        return _weighted_majority(candidates, mode=mode, unstable_threshold=unstable_threshold)
     if mode == "graph_min_cut":
         return _graph_min_cut(candidates, mode=mode, unstable_threshold=unstable_threshold)
     if mode == "quantum_ready":

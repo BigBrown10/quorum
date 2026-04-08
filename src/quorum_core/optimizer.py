@@ -66,13 +66,12 @@ class GreedyOptimizer(Optimizer):
         return best_indices, best_energy
 
     def _solve_local_search(self, problem: OptimizationProblem) -> tuple[list[int], float]:
-        selected_indices = [index for index, cost in enumerate(problem.unary_costs) if cost <= 0]
-        if not selected_indices and problem.unary_costs:
-            seed_index = min(
-                range(len(problem.unary_costs)),
-                key=problem.unary_costs.__getitem__,
-            )
-            selected_indices = [seed_index]
+        if not problem.unary_costs:
+            return [], 0.0
+
+        selected_indices = [
+            min(range(len(problem.unary_costs)), key=problem.unary_costs.__getitem__)
+        ]
         energy = self._energy(selected_indices, problem)
 
         improved = True

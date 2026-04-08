@@ -263,16 +263,24 @@ def consensus_cluster_from_indices(
         if norm > 0:
             centroid_embedding = (centroid / norm).tolist()
 
+    content_counts: dict[str, int] = {}
+    for candidate in selected_candidates:
+        normalized_content = _normalize_content(candidate.content)
+        content_counts[normalized_content] = content_counts.get(normalized_content, 0) + 1
+
     representative_index = 0
-    representative_key: tuple[float, float, int] | None = None
+    representative_key: tuple[float, int, float, int] | None = None
     for relative_index, candidate in enumerate(selected_candidates):
         confidence = _candidate_confidence(candidate)
+        normalized_content = _normalize_content(candidate.content)
+        content_frequency = content_counts[normalized_content]
         centroid_similarity = 0.0
         if centroid_embedding is not None and candidate.embedding is not None:
             centroid_similarity = cosine_similarity(candidate.embedding, centroid_embedding)
 
         candidate_key = (
             confidence,
+            content_frequency,
             centroid_similarity,
             -selected_indices[relative_index],
         )

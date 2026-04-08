@@ -1,5 +1,6 @@
 import sys
 import types
+from typing import Any
 
 import pytest
 
@@ -102,7 +103,7 @@ def test_local_search_seeds_with_lowest_cost_candidate() -> None:
 
 
 def test_dwave_optimizer_falls_back_to_simulated_annealing(monkeypatch) -> None:
-    dimod_module = types.ModuleType("dimod")
+    dimod_module: Any = types.ModuleType("dimod")
 
     class _BinaryQuadraticModel:
         def __init__(self, linear, quadratic, offset, vartype):
@@ -114,8 +115,8 @@ def test_dwave_optimizer_falls_back_to_simulated_annealing(monkeypatch) -> None:
     dimod_module.BinaryQuadraticModel = _BinaryQuadraticModel
     dimod_module.BINARY = object()
 
-    reference_module = types.ModuleType("dimod.reference")
-    samplers_module = types.ModuleType("dimod.reference.samplers")
+    reference_module: Any = types.ModuleType("dimod.reference")
+    samplers_module: Any = types.ModuleType("dimod.reference.samplers")
 
     class _SampleSet:
         def __init__(self):
@@ -129,8 +130,8 @@ def test_dwave_optimizer_falls_back_to_simulated_annealing(monkeypatch) -> None:
     reference_module.samplers = samplers_module
     dimod_module.reference = reference_module
 
-    dwave_system_module = types.ModuleType("dwave.system")
-    dwave_module = types.ModuleType("dwave")
+    dwave_system_module: Any = types.ModuleType("dwave.system")
+    dwave_module: Any = types.ModuleType("dwave")
 
     class _DWaveSampler:
         def __init__(self):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from dataclasses import dataclass
 
 
@@ -54,7 +56,22 @@ DEFAULT_PERSONAS: tuple[PersonaSpec, ...] = (
 )
 
 
-def select_personas(count: int) -> list[PersonaSpec]:
-    if not 1 <= count <= len(DEFAULT_PERSONAS):
-        raise ValueError(f"count must be between 1 and {len(DEFAULT_PERSONAS)}")
-    return list(DEFAULT_PERSONAS[:count])
+def select_personas(count: int, role_names: Sequence[str] | None = None) -> list[PersonaSpec]:
+    if role_names is None:
+        if not 1 <= count <= len(DEFAULT_PERSONAS):
+            raise ValueError(f"count must be between 1 and {len(DEFAULT_PERSONAS)}")
+        return list(DEFAULT_PERSONAS[:count])
+
+    normalized_roles = [role.strip() for role in role_names if role.strip()]
+    if len(normalized_roles) != count:
+        raise ValueError("role_names must match count when provided")
+
+    persona_lookup = {persona.name: persona for persona in DEFAULT_PERSONAS}
+    personas: list[PersonaSpec] = []
+    for role_name in normalized_roles:
+        persona = persona_lookup.get(role_name)
+        if persona is None:
+            raise ValueError(f"Unknown persona role: {role_name}")
+        personas.append(persona)
+
+    return personas

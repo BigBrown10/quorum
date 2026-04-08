@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 from .models import QuorumXConfig
 from .personas import PersonaSpec
@@ -10,29 +10,63 @@ from .personas import PersonaSpec
 
 class QuorumXBackend(ABC):
     @abstractmethod
-    def call_llm(self, prompt: str, config: QuorumXConfig) -> str:
+    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
         raise NotImplementedError
 
     def generate(
         self,
         *,
-        task: str,
-        persona: PersonaSpec,
-        round_index: int,
-        disagreement_summary: str,
+        messages: list[dict[str, Any]],
         config: QuorumXConfig,
     ) -> str:
-        prompt = _build_prompt(task, persona, round_index, disagreement_summary, config)
-        return self.call_llm(prompt, config)
+        return self.call_llm(messages, config)
+
+
+@dataclass(slots=True)
+class OpenAIBackend(QuorumXBackend):
+    model_name: str
+    temperature: float
+    api_key: str | None = None
+    base_url: str | None = None
+    timeout_seconds: float = 30.0
+    _client: Any = field(default=None, init=False, repr=False, compare=False)
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            try:
+                from openai import OpenAI
+            except ImportError as exc:  # pragma: no cover - optional dependency path
+                raise ImportError("openai is required for the default QuorumX backend") from exc
+
+            client_kwargs: dict[str, Any] = {"timeout": self.timeout_seconds}
+            if self.api_key is not None:
+                client_kwargs["api_key"] = self.api_key
+            if self.base_url is not None:
+                client_kwargs["base_url"] = self.base_url
+
+            self._client = OpenAI(**client_kwargs)
+
+        return self._client
+
+    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+        client = self._get_client()
+        response = client.chat.completions.create(
+            model=self.model_name,
+            messages=list(messages),
+            temperature=self.temperature,
+        )
+        message = response.choices[0].message if response.choices else None
+        content = getattr(message, "content", None)
+        return _message_content_to_text(content)
 
 
 @dataclass(slots=True)
 class MockQuorumXBackend(QuorumXBackend):
-    def call_llm(self, prompt: str, config: QuorumXConfig) -> str:
-        persona_name = _extract_prompt_value(prompt, "Persona") or "mock"
-        task = _extract_prompt_value(prompt, "Task") or prompt
-        round_value = _extract_prompt_value(prompt, "Round") or "1/1"
-        disagreement_summary = _extract_prompt_value(prompt, "Disagreement summary") or ""
+    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+        persona_name = _extract_message_marker(messages, "Persona") or "mock"
+        task = _extract_message_marker(messages, "Task") or _last_user_message(messages) or "the task"
+        round_value = _extract_message_marker(messages, "Round") or "1/1"
+        disagreement_summary = _extract_message_marker(messages, "Disagreement summary") or ""
         round_index = _parse_round_index(round_value)
 
         persona = PersonaSpec(
@@ -47,18 +81,6 @@ class MockQuorumXBackend(QuorumXBackend):
             disagreement_summary=disagreement_summary,
             config=config,
         )
-
-    def generate(
-        self,
-        *,
-        task: str,
-        persona: PersonaSpec,
-        round_index: int,
-        disagreement_summary: str,
-        config: QuorumXConfig,
-    ) -> str:
-        prompt = _build_prompt(task, persona, round_index, disagreement_summary, config)
-        return self.call_llm(prompt, config)
 
 
 @dataclass(slots=True)
@@ -76,7 +98,7 @@ class LangChainOpenAIBackend(QuorumXBackend):
                 from langchain_openai import ChatOpenAI
             except ImportError as exc:  # pragma: no cover - optional dependency path
                 raise ImportError(
-                    "langchain-openai is required for real QuorumX mode"
+                    "langchain-openai is required when backend='langchain'"
                 ) from exc
 
             client_kwargs: dict[str, Any] = {
@@ -93,50 +115,37 @@ class LangChainOpenAIBackend(QuorumXBackend):
 
         return self._client
 
-    def call_llm(self, prompt: str, config: QuorumXConfig) -> str:
+    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
         client = self._get_client()
         try:
-            from langchain_core.messages import HumanMessage
+            from langchain_core.messages import (
+                AIMessage,
+                ChatMessage,
+                HumanMessage,
+                SystemMessage,
+                ToolMessage,
+            )
         except ImportError as exc:  # pragma: no cover - optional dependency path
             raise ImportError(
-                "langchain-core is required for real QuorumX mode"
+                "langchain-core is required when backend='langchain'"
             ) from exc
 
-        response = client.invoke([HumanMessage(content=prompt)])
+        def to_message(message: dict[str, Any]) -> Any:
+            role = str(message.get("role", "user")).lower()
+            content = _message_content_to_text(message.get("content"))
+            if role == "system":
+                return SystemMessage(content=content)
+            if role == "assistant":
+                return AIMessage(content=content)
+            if role == "tool":
+                tool_call_id = str(message.get("tool_call_id") or message.get("id") or "tool")
+                return ToolMessage(content=content, tool_call_id=tool_call_id)
+            if role == "developer":
+                return ChatMessage(role="developer", content=content)
+            return HumanMessage(content=content)
+
+        response = client.invoke([to_message(message) for message in messages])
         return _message_content_to_text(response.content)
-
-    def generate(
-        self,
-        *,
-        task: str,
-        persona: PersonaSpec,
-        round_index: int,
-        disagreement_summary: str,
-        config: QuorumXConfig,
-    ) -> str:
-        prompt = _build_prompt(task, persona, round_index, disagreement_summary, config)
-        prompt = f"System: {persona.system_prompt}\n\n{prompt}"
-        return self.call_llm(prompt, config)
-
-
-def _build_prompt(
-    task: str,
-    persona: PersonaSpec,
-    round_index: int,
-    disagreement_summary: str,
-    config: QuorumXConfig,
-) -> str:
-    prompt_lines = [
-        f"Persona: {persona.name}",
-        f"Round: {round_index + 1}/{config.max_rounds}",
-        f"Task: {task}",
-    ]
-    if disagreement_summary:
-        prompt_lines.append(f"Disagreement summary: {disagreement_summary}")
-    prompt_lines.append(
-        f"Return a concise answer within roughly {config.token_cap_per_agent_round} tokens."
-    )
-    return "\n".join(prompt_lines)
 
 
 def _compose_mock_response(
@@ -196,11 +205,23 @@ def _message_content_to_text(content: Any) -> str:
     return str(content).strip()
 
 
-def _extract_prompt_value(prompt: str, label: str) -> str | None:
+def _extract_message_marker(messages: Sequence[dict[str, Any]], label: str) -> str | None:
     prefix = f"{label}:"
-    for line in prompt.splitlines():
-        if line.startswith(prefix):
-            return line[len(prefix):].strip()
+    for message in messages:
+        content = _message_content_to_text(message.get("content"))
+        for line in content.splitlines():
+            if line.startswith(prefix):
+                return line[len(prefix):].strip()
+    return None
+
+
+def _last_user_message(messages: Sequence[dict[str, Any]]) -> str | None:
+    for message in reversed(messages):
+        if str(message.get("role", "")).lower() != "user":
+            continue
+        content = _message_content_to_text(message.get("content"))
+        if content:
+            return content
     return None
 
 

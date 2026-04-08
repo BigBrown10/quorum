@@ -1,4 +1,38 @@
-from quorumx import LangChainOpenAIBackend, QuorumX, QuorumXConfig, QuorumXResult, quorum_x
+from __future__ import annotations
+
+import threading
+from typing import Any
+
+from quorumx import (
+    OpenAIBackend,
+    QuorumX,
+    QuorumXBackend,
+    QuorumXConfig,
+    QuorumXResult,
+    quorum_x,
+)
+
+
+class BarrierBackend(QuorumXBackend):
+    def __init__(self, parties: int) -> None:
+        self.barrier = threading.Barrier(parties)
+        self.thread_ids: list[int] = []
+        self.messages: list[list[dict[str, Any]]] = []
+
+    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+        self.thread_ids.append(threading.get_ident())
+        self.messages.append([dict(message) for message in messages])
+        self.barrier.wait(timeout=5)
+        return "Parallel answer"
+
+
+class RecordingBackend(QuorumXBackend):
+    def __init__(self) -> None:
+        self.messages: list[list[dict[str, Any]]] = []
+
+    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+        self.messages.append([dict(message) for message in messages])
+        return "Recorded answer"
 
 
 def test_quorumx_mock_run_returns_structured_result() -> None:
@@ -23,6 +57,78 @@ def test_quorumx_mock_run_returns_structured_result() -> None:
     assert len(result.tokens_per_round) == result.rounds_used
     assert len(result.benchmark) == 3
     assert result.consensus_mode == "quantum_ready"
+
+
+def test_quorumx_runs_personas_concurrently_per_round() -> None:
+    backend = BarrierBackend(parties=3)
+    engine = QuorumX(
+        QuorumXConfig(
+            n_agents=3,
+            max_rounds=1,
+            stability_threshold=0.7,
+            consensus_mode="quantum_ready",
+            mock_mode=True,
+        ),
+        backend=backend,
+    )
+
+    result = engine.run(
+        "Draft a short launch email for a product update.",
+        messages=[
+            {"role": "system", "content": "You are careful and direct."},
+            {"role": "user", "content": "Keep it short."},
+            {"role": "assistant", "content": "Here is a draft."},
+            {"role": "user", "content": "Now revise it."},
+        ],
+        system_instructions="Follow the company style guide.",
+    )
+
+    assert result.answer == "Parallel answer"
+    assert result.unstable is False
+    assert len(set(backend.thread_ids)) == 3
+    assert len(backend.messages) == 3
+    for message_batch in backend.messages:
+        assert message_batch[0]["role"] == "system"
+        assert message_batch[1]["role"] == "developer"
+        assert message_batch[2]["role"] == "system"
+        assert message_batch[3]["role"] == "system"
+        assert message_batch[4]["role"] == "user"
+        assert message_batch[5]["role"] == "assistant"
+        assert message_batch[6]["role"] == "user"
+
+
+def test_quorumx_preserves_full_message_history_in_backend() -> None:
+    backend = RecordingBackend()
+    engine = QuorumX(
+        QuorumXConfig(
+            n_agents=2,
+            max_rounds=1,
+            stability_threshold=0.6,
+            consensus_mode="quantum_ready",
+            mock_mode=True,
+        ),
+        backend=backend,
+    )
+
+    original_messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Summarize this RFC in one sentence."},
+        {"role": "assistant", "content": "Here is a draft."},
+        {"role": "user", "content": "Revise it for concision."},
+    ]
+
+    engine.run(
+        "Summarize this RFC in one sentence.",
+        messages=original_messages,
+        system_instructions="Follow the company style guide.",
+    )
+
+    assert len(backend.messages) == 2
+    for message_batch in backend.messages:
+        assert message_batch[0]["role"] == "system"
+        assert message_batch[1]["role"] == "developer"
+        assert message_batch[2]["role"] == "system"
+        assert message_batch[3:] == original_messages
 
 
 def test_quorumx_decorator_replaces_original_return_value() -> None:
@@ -66,7 +172,7 @@ def test_quorumx_simple_majority_marks_unstable_when_candidates_disagree() -> No
     assert result.answer == "NO CONSENSUS"
 
 
-def test_quorumx_real_mode_selects_lazy_openai_backend() -> None:
+def test_quorumx_real_mode_selects_default_openai_backend() -> None:
     engine = QuorumX(
         QuorumXConfig(
             n_agents=2,
@@ -76,5 +182,21 @@ def test_quorumx_real_mode_selects_lazy_openai_backend() -> None:
             mock_mode=False,
         )
     )
+
+    assert isinstance(engine.backend, OpenAIBackend)
+
+
+def test_quorumx_langchain_backend_is_optional() -> None:
+    engine = QuorumX(
+        QuorumXConfig(
+            n_agents=2,
+            max_rounds=1,
+            stability_threshold=0.6,
+            consensus_mode="quantum_ready",
+            backend="langchain",
+        )
+    )
+
+    from quorumx import LangChainOpenAIBackend
 
     assert isinstance(engine.backend, LangChainOpenAIBackend)

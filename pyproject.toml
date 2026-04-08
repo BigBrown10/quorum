@@ -18,6 +18,10 @@ embeddings = [
   "sentence-transformers>=3.0",
 ]
 quorumx = [
+  "openai>=1.0.0",
+  "mcp>=1.0.0",
+]
+quorumx-langchain = [
   "langchain-openai>=0.1",
 ]
 dev = [

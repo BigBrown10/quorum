@@ -14,6 +14,22 @@ export type ConsensusRequest = {
   mode?: ConsensusMode;
 };
 
+export {
+  createQuorumXClient,
+  QuorumXClient,
+} from "./quorumx.js";
+
+export type {
+  QuorumXBenchmark,
+  QuorumXChatRequest,
+  QuorumXChatResponse,
+  QuorumXConfig,
+  QuorumXConsensusMode,
+  QuorumXMessage,
+  QuorumXRequest,
+  QuorumXResult,
+} from "./quorumx.js";
+
 export type DisagreementEdge = {
   source_id: string;
   target_id: string;

@@ -21,6 +21,8 @@ CONFIG_FIELD_NAMES = {
     "stability_threshold",
     "token_cap_per_agent_round",
     "consensus_mode",
+    "system_instructions",
+    "roles",
     "model",
     "quorum_model",
     "temperature",
@@ -37,9 +39,14 @@ def resolve_quorumx_payload(
     *,
     telemetry: TelemetryHook | None = None,
 ) -> dict[str, Any]:
-    task = _extract_task(payload)
+    messages = _messages_from_payload(payload)
+    task = _extract_task(payload, messages)
     config = _config_from_payload(payload)
-    result = QuorumX(config).run(task)
+    result = QuorumX(config).run(
+        task,
+        messages=messages,
+        system_instructions=payload.get("system_instructions"),
+    )
     response = quorumx_result_to_payload(result)
     emit_telemetry(
         telemetry,
@@ -61,13 +68,17 @@ def chat_completions_payload(
     *,
     telemetry: TelemetryHook | None = None,
 ) -> dict[str, Any]:
-    messages = payload.get("messages")
-    if not isinstance(messages, list) or not messages:
+    messages = _messages_from_payload(payload)
+    if not messages:
         raise ValueError("'messages' must be a non-empty list")
 
-    task = _task_from_messages(messages)
+    task = _primary_task_from_messages(messages)
     config = _config_from_payload(payload)
-    result = QuorumX(config).run(task)
+    result = QuorumX(config).run(
+        task,
+        messages=messages,
+        system_instructions=payload.get("system_instructions"),
+    )
     created = int(time.time())
     model_name = config.quorum_model or config.model
     prompt_tokens = _count_tokens_from_messages(messages)
@@ -241,35 +252,50 @@ def _config_from_payload(payload: dict[str, Any]) -> QuorumXConfig:
     return QuorumXConfig(**config_payload)
 
 
-def _extract_task(payload: dict[str, Any]) -> str:
+def _extract_task(payload: dict[str, Any], messages: list[dict[str, Any]] | None = None) -> str:
     task = payload.get("task")
-    if not isinstance(task, str) or not task.strip():
-        raise ValueError("'task' must be a non-empty string")
-    return task.strip()
+    if isinstance(task, str) and task.strip():
+        return task.strip()
+
+    if messages:
+        inferred_task = _primary_task_from_messages(messages)
+        if inferred_task:
+            return inferred_task
+
+    raise ValueError("'task' must be a non-empty string")
 
 
-def _task_from_messages(messages: list[Any]) -> str:
-    user_messages: list[str] = []
+def _messages_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    messages = payload.get("messages")
+    if messages is None:
+        return []
+
+    if not isinstance(messages, list):
+        raise ValueError("'messages' must be a non-empty list")
+
+    normalized_messages: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             continue
-        if message.get("role") != "user":
+        normalized_messages.append(dict(message))
+
+    return normalized_messages
+
+
+def _primary_task_from_messages(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if str(message.get("role", "")).lower() != "user":
             continue
-        content = message.get("content")
-        user_messages.append(_message_to_text(content))
+        content = _message_to_text(message.get("content"))
+        if content:
+            return content
 
-    if user_messages:
-        return "\n\n".join(user_messages).strip()
+    for message in reversed(messages):
+        content = _message_to_text(message.get("content"))
+        if content:
+            return content
 
-    fallback_parts = [
-        _message_to_text(message.get("content"))
-        for message in messages
-        if isinstance(message, dict)
-    ]
-    task = "\n\n".join(part for part in fallback_parts if part).strip()
-    if not task:
-        raise ValueError("unable to derive task from messages")
-    return task
+    return ""
 
 
 def _message_to_text(content: Any) -> str:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 from quorum_core.consensus import ConsensusMode
 from quorum_core.models import DisagreementEdge
@@ -21,6 +21,8 @@ class QuorumXConfig:
     stability_threshold: float = 0.7
     token_cap_per_agent_round: int = 150
     consensus_mode: ConsensusMode = "quantum_ready"
+    system_instructions: str | None = None
+    roles: Sequence[str] | None = None
     model: str = "gpt-4o-mini"
     quorum_model: str | None = None
     temperature: float = 0.2
@@ -41,6 +43,14 @@ class QuorumXConfig:
             raise ValueError("token_cap_per_agent_round must be positive")
         if self.consensus_mode not in VALID_CONSENSUS_MODES:
             raise ValueError(f"Unsupported consensus_mode: {self.consensus_mode}")
+        if self.system_instructions is not None:
+            self.system_instructions = self.system_instructions.strip() or None
+        if self.roles is not None:
+            normalized_roles = tuple(role.strip() for role in self.roles if role.strip())
+            if not normalized_roles:
+                raise ValueError("roles must not be empty when provided")
+            self.roles = normalized_roles
+            self.n_agents = len(normalized_roles)
         if not self.model.strip():
             raise ValueError("model must not be empty")
         if self.quorum_model is not None and not self.quorum_model.strip():
@@ -56,6 +66,10 @@ class QuorumXConfig:
             self.backend = self.backend.strip().lower()
             if not self.backend:
                 raise ValueError("backend must not be empty when provided")
+            if self.backend not in {"mock", "openai", "langchain"}:
+                raise ValueError(
+                    "backend must be one of 'mock', 'openai', or 'langchain' when provided"
+                )
             self.mock_mode = self.backend == "mock"
 
 

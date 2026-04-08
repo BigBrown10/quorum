@@ -18,6 +18,7 @@ from .adapters import (
 from .backends import (
     LangChainOpenAIBackend,
     MockQuorumXBackend,
+    OpenAIBackend,
     QuorumXBackend,
 )
 from .engine import QuorumX, quorum_x
@@ -56,6 +57,7 @@ __all__ = [
     "emit_telemetry",
     "normalize_candidates",
     "normalize_to_agent_output",
+    "OpenAIBackend",
     "run_autogen_consensus",
     "run_crewai_consensus",
     "run_langchain_consensus",

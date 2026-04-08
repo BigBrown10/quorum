@@ -76,13 +76,22 @@ class QuorumX:
                     round_index,
                     self.config,
                 )
-                raw_response = self.backend.generate(
-                    task=cleaned_task,
-                    persona=persona,
-                    round_index=round_index,
-                    disagreement_summary=disagreement_summary,
-                    config=self.config,
-                )
+                try:
+                    raw_response = self.backend.generate(
+                        task=cleaned_task,
+                        persona=persona,
+                        round_index=round_index,
+                        disagreement_summary=disagreement_summary,
+                        config=self.config,
+                    )
+                except Exception as exc:
+                    return self._backend_error_result(
+                        task=cleaned_task,
+                        error=exc,
+                        tokens_per_round=tokens_per_round,
+                        benchmark_state=benchmark_state,
+                        round_tokens=round_tokens,
+                    )
                 answer = _truncate_to_token_cap(raw_response, self.config.token_cap_per_agent_round)
                 prompt_tokens = _token_count(prompt_text)
                 response_tokens = _token_count(answer)
@@ -144,11 +153,45 @@ class QuorumX:
 
     @staticmethod
     def _build_default_backend(config: QuorumXConfig) -> QuorumXBackend:
-        if config.mock_mode:
+        if config.backend == "mock" or config.mock_mode:
             return MockQuorumXBackend()
         return LangChainOpenAIBackend(
-            model_name=config.model,
+            model_name=config.quorum_model or config.model,
             temperature=config.temperature,
+            api_key=config.api_key,
+            base_url=config.base_url,
+            timeout_seconds=config.request_timeout_seconds,
+        )
+
+    def _backend_error_result(
+        self,
+        *,
+        task: str,
+        error: Exception,
+        tokens_per_round: list[int],
+        benchmark_state: dict[str, _BenchmarkAccumulator],
+        round_tokens: int,
+    ) -> QuorumXResult:
+        snapshots = [
+            accumulator.snapshot(f"{persona.name}_agent")
+            for persona, accumulator in zip(self.personas, benchmark_state.values(), strict=False)
+        ]
+        all_tokens = tokens_per_round + ([round_tokens] if round_tokens else [])
+        return QuorumXResult(
+            answer="NO CONSENSUS",
+            agreement_score=0.0,
+            unstable=True,
+            rounds_used=max(1, len(tokens_per_round) + 1),
+            total_tokens=sum(all_tokens),
+            tokens_per_round=all_tokens,
+            benchmark=snapshots,
+            disagreement_edges_final=[],
+            selected_agent_ids=[],
+            consensus_mode=self.config.consensus_mode,
+            rationale=(
+                f"NO CONSENSUS: backend error while processing task "
+                f"{_truncate_text(task, 80)!r}: {error}"
+            ),
         )
 
 

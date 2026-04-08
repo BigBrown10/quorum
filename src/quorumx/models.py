@@ -22,8 +22,13 @@ class QuorumXConfig:
     token_cap_per_agent_round: int = 150
     consensus_mode: ConsensusMode = "quantum_ready"
     model: str = "gpt-4o-mini"
+    quorum_model: str | None = None
     temperature: float = 0.2
-    mock_mode: bool = True
+    backend: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+    request_timeout_seconds: float = 30.0
+    mock_mode: bool = False
 
     def __post_init__(self) -> None:
         if not 1 <= self.n_agents <= 5:
@@ -36,8 +41,22 @@ class QuorumXConfig:
             raise ValueError("token_cap_per_agent_round must be positive")
         if self.consensus_mode not in VALID_CONSENSUS_MODES:
             raise ValueError(f"Unsupported consensus_mode: {self.consensus_mode}")
+        if not self.model.strip():
+            raise ValueError("model must not be empty")
+        if self.quorum_model is not None and not self.quorum_model.strip():
+            raise ValueError("quorum_model must not be empty when provided")
         if self.temperature < 0.0:
             raise ValueError("temperature must be non-negative")
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
+
+        if self.backend is None:
+            self.backend = "mock" if self.mock_mode else "openai"
+        else:
+            self.backend = self.backend.strip().lower()
+            if not self.backend:
+                raise ValueError("backend must not be empty when provided")
+            self.mock_mode = self.backend == "mock"
 
 
 @dataclass(slots=True)

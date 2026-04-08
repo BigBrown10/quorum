@@ -17,13 +17,37 @@ This repository currently contains:
 
 ## Status
 
-The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with TF-IDF text embeddings by default, an optional local SentenceTransformer backend, and optional Qiskit and D-Wave backends selected at runtime. QuorumX has started as a separate package scaffold for the V2 reasoning trust layer.
+The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with TF-IDF text embeddings by default, an optional local SentenceTransformer backend, and optional Qiskit and D-Wave backends selected at runtime. QuorumX now has a real-mode-first SDK, a mock backend for CI and offline use, and HTTP and MCP entry points for agent integrations.
 
 ## V2 Direction
 
-Quorum Core is the low-level consensus backend. QuorumX now has a package scaffold on top of it for stance-based multi-agent debate, sparse disagreement summaries, and framework adapters.
+Quorum Core is the low-level consensus backend. QuorumX now sits on top as the reasoning trust layer with stance-based multi-agent debate, sparse disagreement summaries, a Python SDK, adapter helpers, an HTTP gateway, and an MCP server. Framework-specific adapters and usage examples are the next layer of work.
 
 See [docs/v2-vision.md](docs/v2-vision.md) for the research basis, mini-PRD, and integration notes, and [docs/quorumx-implementation-plan.md](docs/quorumx-implementation-plan.md) for the build checklist.
+
+## QuorumX
+
+QuorumX exposes two primary entry points:
+
+- `POST /v1/quorumx` for the native QuorumX request format
+- `POST /v1/chat/completions` for OpenAI-compatible chat completion calls that route through QuorumX
+
+The default `QuorumXConfig` path is real-backend oriented. Use `backend="mock"` only for tests, demos, or offline runs.
+
+```python
+import os
+
+from quorumx import QuorumX, QuorumXConfig, run_langchain_consensus
+
+config = QuorumXConfig(api_key=os.getenv("OPENAI_API_KEY"))
+result = QuorumX(config).run("Review this patch for correctness and regressions.")
+
+consensus = run_langchain_consensus([
+    {"content": "Ship the patch"},
+    {"content": "Ship the patch"},
+    {"content": "Add tests first"},
+])
+```
 
 ## Local API
 
@@ -54,7 +78,7 @@ See [docs/mcp-config.md](docs/mcp-config.md) for sample Claude Desktop and Curso
 
 ## Orchestration Guides
 
-Integration guidance lives in [docs/agent-orchestrations.md](docs/agent-orchestrations.md), and runnable notebooks are in [notebooks](notebooks).
+Integration guidance lives in [docs/agent-orchestrations.md](docs/agent-orchestrations.md), QuorumX usage examples live in [docs/usage.md](docs/usage.md), and runnable notebooks are in [notebooks](notebooks).
 
 ## Embeddings
 

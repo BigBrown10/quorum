@@ -23,6 +23,17 @@ There are two common ways to wire that adapter:
 - Function-level wrapper: wrap the final `task -> answer` function and feed its outputs to Quorum.
 - Gateway or proxy: expose Quorum as a service and point the agent runtime at the HTTP API or an OpenAI-compatible facade.
 
+## QuorumX Adapter Helpers
+
+QuorumX includes thin normalization helpers in `quorumx.adapters` for the common framework output shapes.
+
+- Use `normalize_to_agent_output(...)` when you already know the field names.
+- Use `from_langchain_output(...)`, `from_langgraph_node_output(...)`, `from_crewai_result(...)`, `from_autogen_message(...)`, or `from_openclaw_artifact(...)` when you want a named helper for that runtime.
+- Use `run_langchain_consensus(...)`, `run_langgraph_consensus(...)`, `run_crewai_consensus(...)`, `run_autogen_consensus(...)`, or `run_openclaw_consensus(...)` when you want a one-call wrapper that normalizes and resolves the outputs.
+- Use `run_consensus_round(...)` when the framework already emitted candidate outputs and you want Quorum Core to score them directly.
+
+These helpers keep framework adapters thin and let LangChain, LangGraph, CrewAI, AutoGen, and OpenClaw-style runtimes share the same normalization path.
+
 ## CrewAI
 
 Use Quorum after the agent crew produces candidate responses. Keep the orchestration logic in CrewAI and let Quorum decide whether the crew reached a stable answer.
@@ -41,6 +52,8 @@ OpenClaw can integrate in either of the same two patterns:
 
 - As an HTTP tool or skill that calls Quorum with the current task or candidate answer.
 - As an upstream proxy so one agent's model calls route through Quorum first.
+
+For a direct code path, call `run_openclaw_consensus(...)` on the candidate artifacts after OpenClaw produces them.
 
 Any orchestration that can emit a list of candidate answers can use Quorum. The required shape is candidate content, optional confidence, and optional metadata.
 

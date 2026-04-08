@@ -8,6 +8,7 @@ This repository currently contains:
 - Baseline consensus modes for simple and confidence-weighted majority voting
 - Graph/QUBO consensus with exact classical solving for small problems
 - Semantic text embeddings with TF-IDF default similarity and an optional local SentenceTransformer backend
+- QuorumX package scaffold with a mock debate loop, config models, and a decorator API
 - Optional quantum backends for Qiskit and D-Wave via environment selection
 - A thin HTTP JSON API wrapper over the core
 - A minimal MCP server that exposes `quorum_consensus`
@@ -16,13 +17,13 @@ This repository currently contains:
 
 ## Status
 
-The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with TF-IDF text embeddings by default, an optional local SentenceTransformer backend, and optional Qiskit and D-Wave backends selected at runtime.
+The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with TF-IDF text embeddings by default, an optional local SentenceTransformer backend, and optional Qiskit and D-Wave backends selected at runtime. QuorumX has started as a separate package scaffold for the V2 reasoning trust layer.
 
 ## V2 Direction
 
-Quorum Core is the low-level consensus backend. The longer-term QuorumX layer can sit on top of it as a reasoning trust layer for stance-based multi-agent debate, sparse disagreement summaries, and framework adapters.
+Quorum Core is the low-level consensus backend. QuorumX now has a package scaffold on top of it for stance-based multi-agent debate, sparse disagreement summaries, and framework adapters.
 
-See [docs/v2-vision.md](docs/v2-vision.md) for the research basis, mini-PRD, and integration notes.
+See [docs/v2-vision.md](docs/v2-vision.md) for the research basis, mini-PRD, and integration notes, and [docs/quorumx-implementation-plan.md](docs/quorumx-implementation-plan.md) for the build checklist.
 
 ## Local API
 

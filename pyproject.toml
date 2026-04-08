@@ -17,6 +17,9 @@ dependencies = [
 embeddings = [
   "sentence-transformers>=3.0",
 ]
+quorumx = [
+  "langchain-openai>=0.1",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6.0",

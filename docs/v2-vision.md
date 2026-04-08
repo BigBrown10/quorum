@@ -64,11 +64,11 @@ QuorumX is the reasoning trust layer for AI agents. It wraps existing agent runt
 ## Repo Structure
 
 - `quorum_core/` remains the low-level consensus backend.
-- A future `quorumx/` package can wrap `quorum_core` and expose higher-level debate workflows.
+- `quorumx/` now provides the initial QuorumX scaffold and wraps `quorum_core` for higher-level debate workflows.
 - Thin adapters should keep framework integrations isolated from core consensus logic.
 
 ## Integration Notes
 
-- Function-level wrappers are the simplest integration point.
+- Function-level wrappers are the simplest integration point, and the first QuorumX decorator implementation already follows this pattern.
 - Gateway or proxy integrations work well when the agent runtime already routes model calls through a central service.
 - Framework adapters for LangChain, LangGraph, CrewAI, AutoGen, and OpenClaw should stay thin and call the same Quorum Core contract.

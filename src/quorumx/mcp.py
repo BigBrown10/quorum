@@ -2,27 +2,31 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+
+from .http import resolve_quorumx_payload
+from .telemetry import TelemetryHook, emit_telemetry
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP as FastMCPType
+    from mcp.types import CallToolResult as CallToolResultType
+    from mcp.types import TextContent as TextContentType
+else:
+    FastMCPType = Any
+    CallToolResultType = Any
+    TextContentType = Any
 
 try:  # pragma: no cover - exercised in CI when mcp is unavailable
-    from mcp.server.fastmcp import FastMCP
-    from mcp.types import CallToolResult, TextContent
+    from mcp.server.fastmcp import FastMCP as _ImportedFastMCP
+    from mcp.types import (
+        CallToolResult as _ImportedCallToolResult,
+    )
+    from mcp.types import (
+        TextContent as _ImportedTextContent,
+    )
     MCP_AVAILABLE = True
 except ImportError:  # pragma: no cover - fallback for lightweight environments
     MCP_AVAILABLE = False
-
-    @dataclass(slots=True)
-    class TextContent:
-        type: str
-        text: str
-
-
-    @dataclass(slots=True)
-    class CallToolResult:
-        content: list[Any]
-        structured_content: dict[str, Any] | None = None
-        isError: bool = False
-
 
     @dataclass(slots=True)
     class _ToolSpec:
@@ -30,8 +34,25 @@ except ImportError:  # pragma: no cover - fallback for lightweight environments
         description: str
         inputSchema: dict[str, Any]
 
+    @dataclass(slots=True)
+    class _FallbackTextContent:
+        type: str
+        text: str
+        annotations: Any | None = None
+        meta: dict[str, Any] | None = None
 
-    class FastMCP:  # type: ignore[no-redef]
+    @dataclass(slots=True)
+    class _FallbackCallToolResult:
+        _meta: dict[str, Any] | None = None
+        content: list[Any] = field(default_factory=list)
+        structuredContent: dict[str, Any] | None = None
+        isError: bool = False
+
+        @property
+        def structured_content(self) -> dict[str, Any] | None:
+            return self.structuredContent
+
+    class _FallbackFastMCP:
         def __init__(self, name: str, json_response: bool = True) -> None:
             self.name = name
             self.json_response = json_response
@@ -54,21 +75,30 @@ except ImportError:  # pragma: no cover - fallback for lightweight environments
         async def list_tools(self) -> list[Any]:
             return list(self._tool_specs.values())
 
-        async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
+        async def call_tool(self, name: str, arguments: dict[str, Any]) -> _FallbackCallToolResult:
             if name not in self._tool_handlers:
                 raise ValueError(f"Unknown tool: {name}")
-            return self._tool_handlers[name](**arguments)
+            result = self._tool_handlers[name](**arguments)
+            return cast(_FallbackCallToolResult, _coerce_call_tool_result(result))
 
         def run(self, transport: str = "stdio") -> None:
             raise ImportError(
                 "The optional 'mcp' dependency is required to run the QuorumX MCP server"
             )
 
-from .http import resolve_quorumx_payload
-from .telemetry import TelemetryHook, emit_telemetry
 
 TOOL_NAME = "quorumx.run"
 MCP_TOOL_NAME = TOOL_NAME
+
+
+if MCP_AVAILABLE:
+    _MCP_FASTMCP: Any = _ImportedFastMCP
+    _MCP_CALL_TOOL_RESULT: Any = _ImportedCallToolResult
+    _MCP_TEXT_CONTENT: Any = _ImportedTextContent
+else:
+    _MCP_FASTMCP = _FallbackFastMCP
+    _MCP_CALL_TOOL_RESULT = _FallbackCallToolResult
+    _MCP_TEXT_CONTENT = _FallbackTextContent
 
 
 def _tool_input_schema() -> dict[str, Any]:
@@ -85,8 +115,41 @@ def _tool_input_schema() -> dict[str, Any]:
     }
 
 
-def create_server(*, telemetry: TelemetryHook | None = None) -> FastMCP:
-    server = FastMCP("QuorumX", json_response=True)
+def _make_text_content(text: str) -> TextContentType:
+    if MCP_AVAILABLE:
+        return cast(Any, _ImportedTextContent(type="text", text=text))
+
+    return cast(Any, _FallbackTextContent(type="text", text=text))
+
+
+def _make_call_tool_result(
+    *,
+    content: list[Any],
+    structured_content: dict[str, Any],
+    is_error: bool = False,
+) -> CallToolResultType:
+    if MCP_AVAILABLE:
+        return cast(
+            Any,
+            _ImportedCallToolResult(
+                content=content,
+                structuredContent=structured_content,
+                isError=is_error,
+            ),
+        )
+
+    return cast(
+        Any,
+        _FallbackCallToolResult(
+            content=content,
+            structuredContent=structured_content,
+            isError=is_error,
+        ),
+    )
+
+
+def create_server(*, telemetry: TelemetryHook | None = None) -> FastMCPType:
+    server = _MCP_FASTMCP("QuorumX", json_response=True)
 
     @server.tool(name=TOOL_NAME)
     def quorumx_run(
@@ -95,7 +158,7 @@ def create_server(*, telemetry: TelemetryHook | None = None) -> FastMCP:
         messages: list[dict[str, Any]] | None = None,
         roles: list[str] | None = None,
         config: dict[str, Any] | None = None,
-    ) -> CallToolResult:
+    ) -> CallToolResultType:
         payload = {
             "task": task,
             "system_instructions": system_instructions,
@@ -115,12 +178,12 @@ def create_server(*, telemetry: TelemetryHook | None = None) -> FastMCP:
                 "total_tokens": result["total_tokens"],
             },
         )
-        return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False))],
+        return _make_call_tool_result(
+            content=[_make_text_content(json.dumps(result, ensure_ascii=False))],
             structured_content=result,
         )
 
-    return server
+    return cast(Any, server)
 
 
 mcp = create_server()
@@ -129,18 +192,22 @@ mcp = create_server()
 @dataclass(slots=True)
 class QuorumXMCPServer:
     telemetry: TelemetryHook | None = None
-    _server: FastMCP = field(init=False, repr=False)
+    _server: FastMCPType = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._server = create_server(telemetry=self.telemetry)
+        self._server = cast(Any, create_server(telemetry=self.telemetry))
 
     async def list_tools(self) -> list[Any]:
         return await self._server.list_tools()
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
-        return await self._server.call_tool(name, arguments)
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResultType:
+        result = await self._server.call_tool(name, arguments)
+        return _coerce_call_tool_result(result)
 
-    def run(self, transport: str = "stdio") -> None:
+    def run(
+        self,
+        transport: Literal["stdio", "sse", "streamable-http"] = "stdio",
+    ) -> None:
         self._server.run(transport=transport)
 
 
@@ -150,3 +217,62 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _coerce_call_tool_result(value: Any) -> CallToolResultType:
+    if MCP_AVAILABLE and isinstance(value, _ImportedCallToolResult):
+        return cast(CallToolResultType, value)
+
+    if not MCP_AVAILABLE and isinstance(value, _FallbackCallToolResult):
+        return cast(CallToolResultType, value)
+
+    if isinstance(value, dict):
+        return _make_call_tool_result(
+            content=_coerce_content_items(value.get("content")),
+            structured_content=_structured_content_from_value(
+                value.get("structuredContent", value.get("structured_content"))
+            ) or {},
+            is_error=bool(value.get("isError", value.get("is_error", False))),
+        )
+
+    content = getattr(value, "content", None)
+    structured_content = getattr(value, "structuredContent", None)
+    if structured_content is None:
+        structured_content = getattr(value, "structured_content", None)
+    is_error = bool(getattr(value, "isError", getattr(value, "is_error", False)))
+
+    return _make_call_tool_result(
+        content=_coerce_content_items(content),
+        structured_content=_structured_content_from_value(structured_content) or {},
+        is_error=is_error,
+    )
+
+
+def _coerce_content_items(content: Any) -> list[Any]:
+    if content is None:
+        return []
+    if isinstance(content, list):
+        return content
+    return [content]
+
+
+def _structured_content_from_value(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            dumped = value.model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+        except TypeError:
+            pass
+    if hasattr(value, "dict"):
+        try:
+            dumped = value.dict()
+            if isinstance(dumped, dict):
+                return dumped
+        except TypeError:
+            pass
+    return None

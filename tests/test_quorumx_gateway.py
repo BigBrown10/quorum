@@ -155,9 +155,9 @@ def test_mcp_server_exposes_quorumx_run_tool() -> None:
     assert len(tools) == 1
     assert tools[0].name == MCP_TOOL_NAME
     assert "task" in tools[0].inputSchema["required"]
-    assert result.structured_content is not None
-    assert result.structured_content["answer"]
-    assert result.structured_content["consensus_mode"] == "quantum_ready"
+    assert result.structuredContent is not None
+    assert result.structuredContent["answer"]
+    assert result.structuredContent["consensus_mode"] == "quantum_ready"
 
 
 def test_mcp_server_emits_telemetry() -> None:
@@ -175,6 +175,6 @@ def test_mcp_server_emits_telemetry() -> None:
 
     result = asyncio.run(scenario())
 
-    assert result.structured_content is not None
+    assert result.structuredContent is not None
     assert events[0][0] == "quorumx.resolve"
     assert events[1][0] == "quorumx.mcp.tool_call"

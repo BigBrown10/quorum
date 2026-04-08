@@ -164,6 +164,15 @@ class QuorumX:
                     benchmark_state[persona.name].record(answer, total_tokens, confidence)
 
             if not candidates:
+                if round_index > 0 and last_result is not None:
+                    LOGGER.warning(
+                        (
+                            "All agents failed in round %s, falling back to previous "
+                            "round's consensus."
+                        ),
+                        round_index + 1,
+                    )
+                    break
                 return self._backend_error_result(
                     task=cleaned_task,
                     error=RuntimeError(f"all agents failed in round {round_index + 1}"),

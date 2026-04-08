@@ -64,6 +64,29 @@ class PartialFailureBackend(QuorumXBackend):
         )
 
 
+class RoundFallbackBackend(QuorumXBackend):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def call_llm(
+        self,
+        messages: list[dict[str, Any]],
+        config: QuorumXConfig,
+    ) -> QuorumXBackendResult:
+        persona_name = _extract_marker(messages, "Persona") or "mock"
+        round_value = _extract_marker(messages, "Round") or "1/1"
+        round_index = int(round_value.split("/", 1)[0]) - 1
+        self.calls.append((persona_name, round_index))
+
+        if round_index == 0:
+            return QuorumXBackendResult(
+                text=f"{persona_name} round one",
+                usage=QuorumXUsage(prompt_tokens=11, completion_tokens=7),
+            )
+
+        raise RuntimeError("outage")
+
+
 def test_quorumx_mock_run_returns_structured_result() -> None:
     engine = QuorumX(
         QuorumXConfig(
@@ -193,6 +216,28 @@ def test_quorumx_skips_failed_agents_but_keeps_successful_candidates() -> None:
     assert any(benchmark.token_count == 0 for benchmark in result.benchmark)
 
 
+def test_quorumx_keeps_previous_round_when_later_round_fails() -> None:
+    backend = RoundFallbackBackend()
+    engine = QuorumX(
+        QuorumXConfig(
+            n_agents=3,
+            max_rounds=2,
+            stability_threshold=0.95,
+            consensus_mode="simple_majority",
+            mock_mode=True,
+        ),
+        backend=backend,
+    )
+
+    result = engine.run("Draft a short launch email for a product update.")
+
+    assert result.rounds_used == 1
+    assert result.tokens_per_round == [54]
+    assert result.answer == "NO CONSENSUS"
+    assert result.rationale == "no repeated answer reached the majority threshold"
+    assert len(backend.calls) == 6
+
+
 def test_quorumx_decorator_replaces_original_return_value() -> None:
     called = False
 
@@ -287,3 +332,15 @@ def test_quorumx_langchain_backend_is_optional() -> None:
     from quorumx import LangChainOpenAIBackend
 
     assert isinstance(engine.backend, LangChainOpenAIBackend)
+
+
+def _extract_marker(messages: list[dict[str, Any]], label: str) -> str | None:
+    prefix = f"{label}:"
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        for line in content.splitlines():
+            if line.startswith(prefix):
+                return line[len(prefix):].strip()
+    return None

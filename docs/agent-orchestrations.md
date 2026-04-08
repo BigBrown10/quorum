@@ -1,6 +1,6 @@
 # Quorum Across Agent Orchestrations
 
-Quorum uses the same core contract across orchestration systems:
+Quorum Core is the consensus backend. QuorumX-style orchestration layers can wrap it, but the integration surface stays the same:
 
 1. Gather candidate agent outputs.
 2. Normalize them into `AgentOutput` records.
@@ -18,6 +18,11 @@ The recommended integration pattern is a thin adapter:
 - Quorum returns the consensus result and diagnostics.
 - The framework continues with a stable answer or handles `NO CONSENSUS` explicitly.
 
+There are two common ways to wire that adapter:
+
+- Function-level wrapper: wrap the final `task -> answer` function and feed its outputs to Quorum.
+- Gateway or proxy: expose Quorum as a service and point the agent runtime at the HTTP API or an OpenAI-compatible facade.
+
 ## CrewAI
 
 Use Quorum after the agent crew produces candidate responses. Keep the orchestration logic in CrewAI and let Quorum decide whether the crew reached a stable answer.
@@ -32,11 +37,16 @@ Use Quorum after a round of multi-agent discussion or before final user-facing o
 
 ## OpenClaw and Similar Systems
 
+OpenClaw can integrate in either of the same two patterns:
+
+- As an HTTP tool or skill that calls Quorum with the current task or candidate answer.
+- As an upstream proxy so one agent's model calls route through Quorum first.
+
 Any orchestration that can emit a list of candidate answers can use Quorum. The required shape is candidate content, optional confidence, and optional metadata.
 
 ## Practical Advice
 
-- Prefer precomputed embeddings when you already have them.
+- Prefer semantic embeddings when you already have them. The core now defaults to TF-IDF embeddings and also supports a local SentenceTransformer backend.
 - Use the `unstable` flag to avoid pretending there is consensus when there is not.
 - Keep the adapter thin so the same integration works across frameworks.
 - If you are building your own orchestration layer, call the HTTP API so Python and TypeScript clients share the same wire format.

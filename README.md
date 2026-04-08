@@ -7,6 +7,7 @@ This repository currently contains:
 - Core data models for agent outputs and consensus results
 - Baseline consensus modes for simple and confidence-weighted majority voting
 - Graph/QUBO consensus with exact classical solving for small problems
+- Semantic text embeddings with TF-IDF default similarity and an optional local SentenceTransformer backend
 - Optional quantum backends for Qiskit and D-Wave via environment selection
 - A thin HTTP JSON API wrapper over the core
 - A minimal MCP server that exposes `quorum_consensus`
@@ -15,7 +16,13 @@ This repository currently contains:
 
 ## Status
 
-The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with optional Qiskit and D-Wave backends selected at runtime.
+The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with TF-IDF text embeddings by default, an optional local SentenceTransformer backend, and optional Qiskit and D-Wave backends selected at runtime.
+
+## V2 Direction
+
+Quorum Core is the low-level consensus backend. The longer-term QuorumX layer can sit on top of it as a reasoning trust layer for stance-based multi-agent debate, sparse disagreement summaries, and framework adapters.
+
+See [docs/v2-vision.md](docs/v2-vision.md) for the research basis, mini-PRD, and integration notes.
 
 ## Local API
 
@@ -47,6 +54,30 @@ See [docs/mcp-config.md](docs/mcp-config.md) for sample Claude Desktop and Curso
 ## Orchestration Guides
 
 Integration guidance lives in [docs/agent-orchestrations.md](docs/agent-orchestrations.md), and runnable notebooks are in [notebooks](notebooks).
+
+## Embeddings
+
+Quorum uses semantic text similarity to build disagreement graphs.
+
+By default, the Python core uses TF-IDF embeddings for a dependency-light local path.
+
+For higher-quality semantic matching, install the optional embeddings extra and use the local SentenceTransformer backend. The model downloads on first use:
+
+```bash
+pip install ".[embeddings]"
+```
+
+```python
+from quorum_core.embeddings import SentenceTransformerBackend, embed_texts
+
+backend = SentenceTransformerBackend()
+vectors = embed_texts(
+    ["Paris is the capital of France", "Paris is the capital city of France"],
+    backend=backend,
+)
+```
+
+The hash-based embedding backend has been removed.
 
 ## Quantum Backends
 

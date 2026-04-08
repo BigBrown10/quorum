@@ -18,6 +18,7 @@ def test_simple_majority_picks_most_common_answer() -> None:
     assert result.total_candidates == 3
     assert result.unstable is False
     assert result.agreement_score == 2 / 3
+    assert result.disagreement_edges
 
 
 def test_weighted_majority_uses_confidence_sum() -> None:
@@ -34,6 +35,7 @@ def test_weighted_majority_uses_confidence_sum() -> None:
     assert result.supporting_candidate_count == 2
     assert result.unstable is False
     assert result.agreement_score == pytest.approx((0.9 + 0.3) / (0.2 + 0.9 + 0.3))
+    assert result.disagreement_edges
 
 
 def test_unstable_result_is_explicit_when_every_answer_is_unique() -> None:
@@ -77,3 +79,18 @@ def test_quantum_ready_prefers_stable_structured_answers_without_embeddings() ->
     assert result.unstable is False
     assert set(result.selected_agent_ids) == {"a1", "a2"}
     assert result.supporting_candidate_count == 2
+
+
+def test_graph_min_cut_uses_distinct_mode_and_configurable_threshold() -> None:
+    candidates = [
+        AgentOutput(id="a1", content="shared answer", confidence=0.4),
+        AgentOutput(id="a2", content="shared answer", confidence=0.6),
+        AgentOutput(id="a3", content="different answer", confidence=0.9),
+    ]
+
+    stable_result = resolve_consensus(candidates, mode="graph_min_cut")
+    strict_result = resolve_consensus(candidates, mode="graph_min_cut", unstable_threshold=0.99)
+
+    assert stable_result.mode == "graph_min_cut"
+    assert stable_result.disagreement_edges
+    assert strict_result.unstable is True

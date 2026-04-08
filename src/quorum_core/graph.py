@@ -127,6 +127,63 @@ def build_qubo_problem(candidates: list[AgentOutput]) -> OptimizationProblem:
     )
 
 
+def minimum_disagreement_cut(candidates: list[AgentOutput]) -> tuple[list[int], float]:
+    if not candidates:
+        return [], 0.0
+    if len(candidates) == 1:
+        return [0], 0.0
+
+    edges = build_disagreement_graph(candidates)
+    index_by_id = {candidate.id: index for index, candidate in enumerate(candidates)}
+    adjacency = [[0.0 for _ in candidates] for _ in candidates]
+
+    for edge in edges:
+        left_index = index_by_id[edge.source_id]
+        right_index = index_by_id[edge.target_id]
+        adjacency[left_index][right_index] += edge.weight
+        adjacency[right_index][left_index] += edge.weight
+
+    supernodes = [set([index]) for index in range(len(candidates))]
+    active = list(range(len(candidates)))
+    best_cut_weight = float("inf")
+    best_partition = [0]
+
+    while len(active) > 1:
+        used: set[int] = set()
+        weights = {index: 0.0 for index in active}
+        previous = None
+
+        for _ in range(len(active)):
+            current = max(
+                (index for index in active if index not in used),
+                key=lambda index: (weights[index], -min(supernodes[index]), -index),
+            )
+            used.add(current)
+
+            if len(used) == len(active):
+                cut_weight = weights[current]
+                if cut_weight < best_cut_weight:
+                    best_cut_weight = cut_weight
+                    best_partition = sorted(supernodes[current])
+
+                if previous is not None:
+                    for neighbor in active:
+                        if neighbor in {previous, current}:
+                            continue
+                        adjacency[previous][neighbor] += adjacency[current][neighbor]
+                        adjacency[neighbor][previous] = adjacency[previous][neighbor]
+                    supernodes[previous].update(supernodes[current])
+                    active.remove(current)
+                break
+
+            previous = current
+            for neighbor in active:
+                if neighbor not in used:
+                    weights[neighbor] += adjacency[current][neighbor]
+
+    return best_partition, best_cut_weight
+
+
 def _candidate_confidence(candidate: AgentOutput) -> float:
     if candidate.confidence is None:
         return 1.0

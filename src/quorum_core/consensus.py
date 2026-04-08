@@ -8,8 +8,9 @@ from .graph import (
     build_disagreement_graph,
     build_qubo_problem,
     consensus_cluster_from_indices,
+    minimum_disagreement_cut,
 )
-from .models import AgentOutput, ConsensusResult
+from .models import AgentOutput, ConsensusResult, DisagreementEdge
 from .optimizer import GreedyOptimizer
 from .quantum import QuantumBackendUnavailableError, get_optimizer
 
@@ -26,6 +27,7 @@ class _CandidateGroup:
     normalized_content: str
     canonical_content: Any
     agent_ids: list[str]
+    candidate_indices: list[int]
     confidences: list[float]
     first_index: int
 
@@ -54,10 +56,17 @@ def _candidate_confidence(candidate: AgentOutput) -> float:
     return max(0.0, min(1.0, float(candidate.confidence)))
 
 
-def _group_candidates(candidates: list[AgentOutput]) -> list[_CandidateGroup]:
+def _group_candidates(
+    candidates: list[AgentOutput],
+    candidate_indices: list[int] | None = None,
+) -> list[_CandidateGroup]:
+    if candidate_indices is None:
+        candidate_indices = list(range(len(candidates)))
+
     groups: dict[str, _CandidateGroup] = {}
 
-    for index, candidate in enumerate(candidates):
+    for index in candidate_indices:
+        candidate = candidates[index]
         normalized = _normalize_content(candidate.content)
         confidence = _candidate_confidence(candidate)
 
@@ -66,6 +75,7 @@ def _group_candidates(candidates: list[AgentOutput]) -> list[_CandidateGroup]:
                 normalized_content=normalized,
                 canonical_content=candidate.content,
                 agent_ids=[candidate.id],
+                candidate_indices=[index],
                 confidences=[confidence],
                 first_index=index,
             )
@@ -73,6 +83,7 @@ def _group_candidates(candidates: list[AgentOutput]) -> list[_CandidateGroup]:
 
         group = groups[normalized]
         group.agent_ids.append(candidate.id)
+        group.candidate_indices.append(index)
         group.confidences.append(confidence)
 
     return sorted(groups.values(), key=lambda group: group.first_index)
@@ -86,6 +97,7 @@ def _build_result(
     score: float,
     unstable: bool,
     rationale: str,
+    disagreement_edges: list[DisagreementEdge],
 ) -> ConsensusResult:
     if unstable:
         return ConsensusResult(
@@ -97,7 +109,7 @@ def _build_result(
             total_candidates=total_candidates,
             unstable=True,
             mode=mode,
-            disagreement_edges=[],
+            disagreement_edges=disagreement_edges,
             rationale=rationale,
         )
 
@@ -110,7 +122,7 @@ def _build_result(
         total_candidates=total_candidates,
         unstable=False,
         mode=mode,
-        disagreement_edges=[],
+        disagreement_edges=disagreement_edges,
         rationale=rationale,
     )
 
@@ -119,6 +131,8 @@ def _simple_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) -> C
     groups = _group_candidates(candidates)
     if not groups:
         raise ValueError("resolve_consensus() requires at least one candidate")
+
+    disagreement_edges = build_disagreement_graph(candidates)
 
     winner = max(
         groups,
@@ -136,6 +150,7 @@ def _simple_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) -> C
         score=score,
         unstable=unstable,
         rationale=rationale,
+        disagreement_edges=disagreement_edges,
     )
 
 
@@ -143,6 +158,8 @@ def _weighted_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) ->
     groups = _group_candidates(candidates)
     if not groups:
         raise ValueError("resolve_consensus() requires at least one candidate")
+
+    disagreement_edges = build_disagreement_graph(candidates)
 
     winner = max(
         groups,
@@ -161,6 +178,85 @@ def _weighted_majority(candidates: list[AgentOutput], *, mode: ConsensusMode) ->
         score=score,
         unstable=unstable,
         rationale=rationale,
+        disagreement_edges=disagreement_edges,
+    )
+
+
+def _graph_min_cut(
+    candidates: list[AgentOutput],
+    *,
+    mode: ConsensusMode,
+    unstable_threshold: float,
+) -> ConsensusResult:
+    if not candidates:
+        raise ValueError("resolve_consensus() requires at least one candidate")
+
+    disagreement_edges = build_disagreement_graph(candidates)
+    selected_indices, cut_weight = minimum_disagreement_cut(candidates)
+    if not selected_indices:
+        return ConsensusResult(
+            consensus_answer="NO CONSENSUS",
+            consensus_cluster_id="unstable",
+            selected_agent_ids=[],
+            agreement_score=0.0,
+            supporting_candidate_count=0,
+            total_candidates=len(candidates),
+            unstable=True,
+            mode=mode,
+            disagreement_edges=disagreement_edges,
+            rationale="graph min-cut could not identify a stable partition",
+        )
+
+    alternate_indices = [
+        index for index in range(len(candidates)) if index not in set(selected_indices)
+    ]
+
+    def _support_key(indices: list[int]) -> tuple[int, float, int]:
+        return (
+            len(indices),
+            sum(_candidate_confidence(candidates[index]) for index in indices),
+            -min(indices) if indices else 0,
+        )
+
+    if _support_key(alternate_indices) > _support_key(selected_indices):
+        selected_indices = alternate_indices
+
+    selected_groups = _group_candidates(candidates, selected_indices)
+    winner = max(
+        selected_groups,
+        key=lambda group: (group.count, group.confidence_sum, -group.first_index),
+    )
+
+    total_disagreement = sum(edge.weight for edge in disagreement_edges) or 1.0
+    agreement_score = max(0.0, min(1.0, 1.0 - (cut_weight / total_disagreement)))
+    singleton_consensus = len(winner.agent_ids) == 1 and len(candidates) > 1
+    unstable = agreement_score < unstable_threshold or singleton_consensus
+
+    if unstable:
+        return ConsensusResult(
+            consensus_answer="NO CONSENSUS",
+            consensus_cluster_id="unstable",
+            selected_agent_ids=[],
+            agreement_score=agreement_score,
+            supporting_candidate_count=len(winner.agent_ids),
+            total_candidates=len(candidates),
+            unstable=True,
+            mode=mode,
+            disagreement_edges=disagreement_edges,
+            rationale="graph min-cut could not find a stable consensus",
+        )
+
+    return ConsensusResult(
+        consensus_answer=winner.canonical_content,
+        consensus_cluster_id=f"cluster_{winner.first_index}",
+        selected_agent_ids=winner.agent_ids,
+        agreement_score=agreement_score,
+        supporting_candidate_count=len(winner.agent_ids),
+        total_candidates=len(candidates),
+        unstable=False,
+        mode=mode,
+        disagreement_edges=disagreement_edges,
+        rationale="graph min-cut consensus",
     )
 
 
@@ -168,6 +264,7 @@ def _graph_or_quantum_ready(
     candidates: list[AgentOutput],
     *,
     mode: ConsensusMode,
+    unstable_threshold: float,
 ) -> ConsensusResult:
     if not candidates:
         raise ValueError("resolve_consensus() requires at least one candidate")
@@ -198,7 +295,8 @@ def _graph_or_quantum_ready(
     cluster = consensus_cluster_from_indices(candidates, solution.selected_indices)
     total_possible = max(1.0, len(candidates) + len(disagreement_edges))
     agreement_score = max(0.0, min(1.0, 1.0 - (solution.energy / total_possible)))
-    unstable = agreement_score < 0.45 or len(cluster.agent_ids) == 1 and len(candidates) > 1
+    singleton_consensus = len(cluster.agent_ids) == 1 and len(candidates) > 1
+    unstable = agreement_score < unstable_threshold or singleton_consensus
 
     if unstable:
         return ConsensusResult(
@@ -231,6 +329,8 @@ def _graph_or_quantum_ready(
 def resolve_consensus(
     candidates: list[AgentOutput],
     mode: ConsensusMode = "quantum_ready",
+    *,
+    unstable_threshold: float = 0.45,
 ) -> ConsensusResult:
     """Resolve a consensus answer from candidate agent outputs.
 
@@ -243,8 +343,12 @@ def resolve_consensus(
     if mode == "weighted_majority":
         return _weighted_majority(candidates, mode=mode)
     if mode == "graph_min_cut":
-        return _graph_or_quantum_ready(candidates, mode=mode)
+        return _graph_min_cut(candidates, mode=mode, unstable_threshold=unstable_threshold)
     if mode == "quantum_ready":
-        return _graph_or_quantum_ready(candidates, mode=mode)
+        return _graph_or_quantum_ready(
+            candidates,
+            mode=mode,
+            unstable_threshold=unstable_threshold,
+        )
 
     raise ValueError(f"Unknown consensus mode: {mode}")

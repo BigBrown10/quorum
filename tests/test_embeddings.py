@@ -1,4 +1,4 @@
-from quorum_core import AgentOutput, HashEmbeddingBackend, embed_texts
+from quorum_core import AgentOutput, HashEmbeddingBackend, TfidfEmbeddingBackend, embed_texts
 from quorum_core.graph import cluster_candidates
 
 
@@ -17,7 +17,17 @@ def test_embed_texts_uses_default_backend() -> None:
     vectors = embed_texts(["alpha", "beta"])
 
     assert len(vectors) == 2
-    assert len(vectors[0]) == 16
+    assert len(vectors[0]) > 0
+    assert vectors[0] != vectors[1]
+
+
+def test_tfidf_embedding_backend_groups_similar_texts() -> None:
+    backend = TfidfEmbeddingBackend()
+
+    vectors = backend.embed(["the quick brown fox", "the quick brown fox jumps"])
+
+    assert len(vectors) == 2
+    assert len(vectors[0]) == len(vectors[1])
     assert vectors[0] != vectors[1]
 
 

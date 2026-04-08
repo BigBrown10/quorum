@@ -5,6 +5,8 @@ import math
 from dataclasses import dataclass
 from typing import Protocol
 
+from sklearn.feature_extraction.text import TfidfVectorizer
+
 
 class EmbeddingBackend(Protocol):
     """Backend interface for turning text into numeric embeddings."""
@@ -40,6 +42,24 @@ class HashEmbeddingBackend:
         return [value / norm for value in values]
 
 
+@dataclass(slots=True)
+class TfidfEmbeddingBackend:
+    min_ngram: int = 3
+    max_ngram: int = 5
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        prepared_texts = [text.strip().lower() or "<empty>" for text in texts]
+        vectorizer = TfidfVectorizer(
+            analyzer="char_wb",
+            ngram_range=(self.min_ngram, self.max_ngram),
+        )
+        matrix = vectorizer.fit_transform(prepared_texts)
+        return matrix.toarray().tolist()
+
+
 def embed_texts(texts: list[str], backend: EmbeddingBackend | None = None) -> list[list[float]]:
-    active_backend = backend or HashEmbeddingBackend()
+    active_backend = backend or TfidfEmbeddingBackend()
     return active_backend.embed(texts)

@@ -31,8 +31,14 @@ TOOL_SCHEMA: dict[str, Any] = {
         },
         "mode": {
             "type": "string",
-            "enum": ["simple_majority", "weighted_majority", "quantum_ready"],
+            "enum": ["simple_majority", "weighted_majority", "graph_min_cut", "quantum_ready"],
             "default": "quantum_ready",
+        },
+        "unstable_threshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.45,
         },
     },
     "required": ["candidates"],
@@ -48,7 +54,12 @@ class QuorumMCPServer:
             "tools": [
                 {
                     "name": TOOL_NAME,
-                    "description": "Resolve consensus across multiple AI agent outputs.",
+                    "description": (
+                        "Resolve consensus across multiple LLM-based AI agent outputs. Returns "
+                        "the best-supported answer, an agreement score, and an explicit "
+                        "unstable flag when no stable consensus exists. Supports classical and "
+                        "quantum-ready backends."
+                    ),
                     "inputSchema": TOOL_SCHEMA,
                 }
             ]

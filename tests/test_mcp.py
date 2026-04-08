@@ -9,6 +9,8 @@ def test_list_tools_exposes_quorum_consensus() -> None:
     assert len(tools) == 1
     assert tools[0]["name"] == TOOL_NAME
     assert "candidates" in tools[0]["inputSchema"]["required"]
+    assert "graph_min_cut" in tools[0]["inputSchema"]["properties"]["mode"]["enum"]
+    assert "unstable_threshold" in tools[0]["inputSchema"]["properties"]
 
 
 def test_tools_call_returns_structured_consensus_payload() -> None:

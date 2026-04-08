@@ -48,8 +48,19 @@ def resolve_consensus_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if mode not in {"simple_majority", "weighted_majority", "graph_min_cut", "quantum_ready"}:
         raise ValueError(f"Unsupported mode: {mode}")
 
+    unstable_threshold = payload.get("unstable_threshold", 0.45)
+    if not isinstance(unstable_threshold, (int, float)):
+        raise ValueError("unstable_threshold must be a number")
+    unstable_threshold = float(unstable_threshold)
+    if not 0.0 <= unstable_threshold <= 1.0:
+        raise ValueError("unstable_threshold must be between 0 and 1")
+
     candidates = [_candidate_from_payload(candidate) for candidate in candidates_payload]
-    result = resolve_consensus(candidates, mode=mode)
+    result = resolve_consensus(
+        candidates,
+        mode=mode,
+        unstable_threshold=unstable_threshold,
+    )
     return consensus_result_to_payload(result)
 
 

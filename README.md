@@ -1,11 +1,13 @@
 # Quorum
 
-Quorum is a consensus engine for distributed agent systems.
+Quorum is a consensus engine for distributed agent systems with a quantum-ready optimization path.
 
 This repository currently contains:
 
 - Core data models for agent outputs and consensus results
 - Baseline consensus modes for simple and confidence-weighted majority voting
+- Graph/QUBO consensus with exact classical solving for small problems
+- Optional quantum backends for Qiskit and D-Wave via environment selection
 - A thin HTTP JSON API wrapper over the core
 - A minimal MCP server that exposes `quorum_consensus`
 - A TypeScript client for the HTTP API
@@ -13,7 +15,7 @@ This repository currently contains:
 
 ## Status
 
-The Python core is being built first. HTTP, TypeScript, and MCP layers are being added on top of this core.
+The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with optional Qiskit and D-Wave backends selected at runtime.
 
 ## Local API
 
@@ -52,6 +54,8 @@ Optional backend selection is controlled through environment variables:
 
 - `QUORUM_OPTIMIZER=qiskit` or `QUORUM_OPTIMIZER=dwave`
 - `QUORUM_ALLOW_CLASSICAL_FALLBACK=true` to fall back to the classical optimizer when a requested quantum backend is unavailable
+
+The quantum path maps consensus to a QUBO objective and can use Qiskit or D-Wave when those packages and credentials are available.
 
 ## TypeScript Client
 

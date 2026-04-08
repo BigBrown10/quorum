@@ -2,7 +2,7 @@
 
 from .api import resolve_consensus_payload
 from .consensus import resolve_consensus
-from .embeddings import HashEmbeddingBackend, TfidfEmbeddingBackend, embed_texts
+from .embeddings import SentenceTransformerBackend, TfidfEmbeddingBackend, embed_texts
 from .graph import (
     ConsensusCluster,
     build_disagreement_graph,
@@ -17,7 +17,7 @@ __all__ = [
     "ConsensusCluster",
     "ConsensusResult",
     "DisagreementEdge",
-    "HashEmbeddingBackend",
+    "SentenceTransformerBackend",
     "TfidfEmbeddingBackend",
     "DWaveOptimizer",
     "build_disagreement_graph",

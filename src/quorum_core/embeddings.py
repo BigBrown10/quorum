@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import math
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -13,33 +11,6 @@ class EmbeddingBackend(Protocol):
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         raise NotImplementedError
-
-
-@dataclass(slots=True)
-class HashEmbeddingBackend:
-    dimensions: int = 16
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        vectors: list[list[float]] = []
-        for text in texts:
-            vectors.append(self._embed_one(text))
-        return vectors
-
-    def _embed_one(self, text: str) -> list[float]:
-        values = [0.0] * self.dimensions
-        normalized = text.strip().lower()
-        if not normalized:
-            return values
-
-        digest = hashlib.sha256(normalized.encode("utf-8")).digest()
-        for index in range(self.dimensions):
-            byte_value = digest[index % len(digest)]
-            values[index] = (byte_value / 255.0) * 2.0 - 1.0
-
-        norm = math.sqrt(sum(value * value for value in values))
-        if norm == 0.0:
-            return values
-        return [value / norm for value in values]
 
 
 @dataclass(slots=True)
@@ -58,6 +29,37 @@ class TfidfEmbeddingBackend:
         )
         matrix = vectorizer.fit_transform(prepared_texts)
         return matrix.toarray().tolist()
+
+
+@dataclass(slots=True)
+class SentenceTransformerBackend:
+    model_name: str = "all-MiniLM-L6-v2"
+    _model: Any = field(default=None, init=False, repr=False, compare=False)
+
+    def _get_model(self) -> Any:
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:  # pragma: no cover - optional dependency path
+                raise ImportError(
+                    "sentence-transformers is required for SentenceTransformerBackend"
+                ) from exc
+
+            self._model = SentenceTransformer(self.model_name)
+
+        return self._model
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        model = self._get_model()
+        embeddings = model.encode(
+            texts,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
+        return embeddings.tolist()
 
 
 def embed_texts(texts: list[str], backend: EmbeddingBackend | None = None) -> list[list[float]]:

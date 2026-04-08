@@ -4,13 +4,17 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from .models import QuorumXConfig
+from .models import QuorumXBackendResult, QuorumXConfig, QuorumXUsage
 from .personas import PersonaSpec
 
 
 class QuorumXBackend(ABC):
     @abstractmethod
-    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+    def call_llm(
+        self,
+        messages: list[dict[str, Any]],
+        config: QuorumXConfig,
+    ) -> QuorumXBackendResult | str:
         raise NotImplementedError
 
     def generate(
@@ -18,8 +22,9 @@ class QuorumXBackend(ABC):
         *,
         messages: list[dict[str, Any]],
         config: QuorumXConfig,
-    ) -> str:
-        return self.call_llm(messages, config)
+    ) -> QuorumXBackendResult:
+        response = self.call_llm(messages, config)
+        return _coerce_backend_result(response, messages)
 
 
 @dataclass(slots=True)
@@ -48,7 +53,11 @@ class OpenAIBackend(QuorumXBackend):
 
         return self._client
 
-    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+    def call_llm(
+        self,
+        messages: list[dict[str, Any]],
+        config: QuorumXConfig,
+    ) -> QuorumXBackendResult:
         client = self._get_client()
         response = client.chat.completions.create(
             model=self.model_name,
@@ -57,14 +66,24 @@ class OpenAIBackend(QuorumXBackend):
         )
         message = response.choices[0].message if response.choices else None
         content = getattr(message, "content", None)
-        return _message_content_to_text(content)
+        text = _message_content_to_text(content)
+        usage = _usage_from_openai_response(response, messages, text)
+        return QuorumXBackendResult(text=text, usage=usage)
 
 
 @dataclass(slots=True)
 class MockQuorumXBackend(QuorumXBackend):
-    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+    def call_llm(
+        self,
+        messages: list[dict[str, Any]],
+        config: QuorumXConfig,
+    ) -> QuorumXBackendResult:
         persona_name = _extract_message_marker(messages, "Persona") or "mock"
-        task = _extract_message_marker(messages, "Task") or _last_user_message(messages) or "the task"
+        task = (
+            _extract_message_marker(messages, "Task")
+            or _last_user_message(messages)
+            or "the task"
+        )
         round_value = _extract_message_marker(messages, "Round") or "1/1"
         disagreement_summary = _extract_message_marker(messages, "Disagreement summary") or ""
         round_index = _parse_round_index(round_value)
@@ -74,13 +93,14 @@ class MockQuorumXBackend(QuorumXBackend):
             system_prompt="",
             confidence_bias=0.7,
         )
-        return _compose_mock_response(
+        text = _compose_mock_response(
             task=task,
             persona=persona,
             round_index=round_index,
             disagreement_summary=disagreement_summary,
             config=config,
         )
+        return QuorumXBackendResult(text=text, usage=_approximate_usage(messages, text))
 
 
 @dataclass(slots=True)
@@ -115,12 +135,15 @@ class LangChainOpenAIBackend(QuorumXBackend):
 
         return self._client
 
-    def call_llm(self, messages: list[dict[str, Any]], config: QuorumXConfig) -> str:
+    def call_llm(
+        self,
+        messages: list[dict[str, Any]],
+        config: QuorumXConfig,
+    ) -> QuorumXBackendResult:
         client = self._get_client()
         try:
             from langchain_core.messages import (
                 AIMessage,
-                ChatMessage,
                 HumanMessage,
                 SystemMessage,
                 ToolMessage,
@@ -140,12 +163,12 @@ class LangChainOpenAIBackend(QuorumXBackend):
             if role == "tool":
                 tool_call_id = str(message.get("tool_call_id") or message.get("id") or "tool")
                 return ToolMessage(content=content, tool_call_id=tool_call_id)
-            if role == "developer":
-                return ChatMessage(role="developer", content=content)
             return HumanMessage(content=content)
 
         response = client.invoke([to_message(message) for message in messages])
-        return _message_content_to_text(response.content)
+        text = _message_content_to_text(response.content)
+        usage = _usage_from_langchain_response(response, messages, text)
+        return QuorumXBackendResult(text=text, usage=usage)
 
 
 def _compose_mock_response(
@@ -203,6 +226,134 @@ def _message_content_to_text(content: Any) -> str:
         return " ".join(fragment for fragment in fragments if fragment).strip()
 
     return str(content).strip()
+
+
+def _coerce_backend_result(
+    response: Any,
+    messages: Sequence[dict[str, Any]],
+) -> QuorumXBackendResult:
+    if isinstance(response, QuorumXBackendResult):
+        return response
+
+    if isinstance(response, tuple) and len(response) == 2:
+        text_value, usage_value = response
+        usage = _coerce_usage(usage_value)
+        if usage is not None:
+            return QuorumXBackendResult(
+                text=_message_content_to_text(text_value),
+                usage=usage,
+            )
+
+    if isinstance(response, dict):
+        text_value = response.get("text", response.get("content", response))
+        usage = _coerce_usage(response.get("usage"))
+        if usage is not None:
+            return QuorumXBackendResult(
+                text=_message_content_to_text(text_value),
+                usage=usage,
+            )
+        response_text = _message_content_to_text(text_value)
+        return QuorumXBackendResult(
+            text=response_text,
+            usage=_approximate_usage(messages, response_text),
+        )
+
+    text_value = getattr(response, "text", getattr(response, "content", response))
+    usage = _coerce_usage(getattr(response, "usage", None))
+    response_text = _message_content_to_text(text_value)
+    if usage is None:
+        usage = _approximate_usage(messages, response_text)
+
+    return QuorumXBackendResult(text=response_text, usage=usage)
+
+
+def _approximate_usage(
+    messages: Sequence[dict[str, Any]],
+    text: str,
+) -> QuorumXUsage:
+    prompt_tokens = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        prompt_tokens += max(1, len(_message_content_to_text(message.get("content")).split()))
+
+    return QuorumXUsage(
+        prompt_tokens=max(1, prompt_tokens),
+        completion_tokens=max(1, len(text.split())),
+    )
+
+
+def _usage_from_openai_response(
+    response: Any,
+    messages: Sequence[dict[str, Any]],
+    text: str,
+) -> QuorumXUsage:
+    usage = _coerce_usage(getattr(response, "usage", None))
+    if usage is not None:
+        return usage
+    return _approximate_usage(messages, text)
+
+
+def _usage_from_langchain_response(
+    response: Any,
+    messages: Sequence[dict[str, Any]],
+    text: str,
+) -> QuorumXUsage:
+    usage = _coerce_usage(getattr(response, "usage_metadata", None))
+    if usage is not None:
+        return usage
+
+    usage = _coerce_usage(getattr(response, "usage", None))
+    if usage is not None:
+        return usage
+
+    response_metadata = getattr(response, "response_metadata", None)
+    if isinstance(response_metadata, dict):
+        for key in ("token_usage", "usage", "usage_metadata"):
+            usage = _coerce_usage(response_metadata.get(key))
+            if usage is not None:
+                return usage
+
+    return _approximate_usage(messages, text)
+
+
+def _coerce_usage(value: Any) -> QuorumXUsage | None:
+    if value is None:
+        return None
+
+    if isinstance(value, QuorumXUsage):
+        return value
+
+    if isinstance(value, tuple) and len(value) >= 2:
+        first, second = value[0], value[1]
+        if isinstance(first, (int, float)) and isinstance(second, (int, float)):
+            return QuorumXUsage(prompt_tokens=int(first), completion_tokens=int(second))
+
+    if isinstance(value, dict):
+        prompt_tokens = value.get("prompt_tokens", value.get("input_tokens"))
+        completion_tokens = value.get("completion_tokens", value.get("output_tokens"))
+        if prompt_tokens is not None and completion_tokens is not None:
+            return QuorumXUsage(
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+            )
+        return None
+
+    prompt_tokens = getattr(value, "prompt_tokens", None)
+    if prompt_tokens is None:
+        prompt_tokens = getattr(value, "input_tokens", None)
+
+    completion_tokens = getattr(value, "completion_tokens", None)
+    if completion_tokens is None:
+        completion_tokens = getattr(value, "output_tokens", None)
+
+    if prompt_tokens is None or completion_tokens is None:
+        return None
+
+    return QuorumXUsage(
+        prompt_tokens=int(prompt_tokens),
+        completion_tokens=int(completion_tokens),
+    )
 
 
 def _extract_message_marker(messages: Sequence[dict[str, Any]], label: str) -> str | None:

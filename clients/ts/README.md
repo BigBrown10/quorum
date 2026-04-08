@@ -1,8 +1,11 @@
 # Quorum TypeScript Client
 
-This package is a thin TypeScript client for the Quorum HTTP API.
+This package exposes two separate client surfaces:
 
-## Usage
+- The core client for the Quorum `/resolve` HTTP API.
+- The QuorumX helper for `/v1/quorumx` and `/v1/chat/completions`.
+
+## Core Usage
 
 ```ts
 import { createQuorumClient } from "./src/index.js";
@@ -19,3 +22,28 @@ const result = await client.resolveConsensus({
 
 console.log(result.consensus_answer);
 ```
+
+## QuorumX Usage
+
+```ts
+import { createQuorumXClient } from "./src/quorumx.js";
+
+const client = createQuorumXClient("http://127.0.0.1:8010");
+
+const result = await client.run({
+  task: "Review this patch for correctness and regressions.",
+  config: {
+    n_agents: 3,
+    max_rounds: 2,
+    model: "gpt-4o-mini",
+    quorum_model: "gpt-4o-mini",
+  },
+});
+
+console.log(result.answer);
+console.log(result.unstable);
+console.log(result.prompt_tokens);
+console.log(result.completion_tokens);
+```
+
+Use `client.chatCompletions(...)` when you want the OpenAI-compatible chat envelope. The helper is JSON-first; if you need `stream=true`, call `fetch` directly so you can consume the SSE response from `/v1/chat/completions`.

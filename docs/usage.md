@@ -1,6 +1,128 @@
 # Quorum Usage Guide
 
-## Python Core
+## QuorumX Golden Path
+
+QuorumX is the framework-agnostic reasoning trust layer. Start here if you want a stable, scored answer in front of an LLM or multi-agent workflow.
+
+```python
+import os
+
+from quorumx import QuorumX, QuorumXConfig
+
+config = QuorumXConfig(
+    n_agents=3,
+    max_rounds=2,
+    consensus_mode="quantum_ready",
+    api_key=os.getenv("OPENAI_API_KEY"),
+)
+
+result = QuorumX(config).run(
+    "Review this Python patch for correctness, edge cases, and regressions.",
+    messages=[
+        {"role": "system", "content": "You are a careful reviewer."},
+        {"role": "user", "content": "Focus on correctness, tests, and failure modes."},
+    ],
+    system_instructions="Be concise and concrete.",
+)
+
+print({
+    "answer": result.answer,
+    "unstable": result.unstable,
+    "agreement_score": result.agreement_score,
+    "rounds_used": result.rounds_used,
+    "prompt_tokens": result.prompt_tokens,
+    "completion_tokens": result.completion_tokens,
+    "total_tokens": result.total_tokens,
+})
+```
+
+A typical `QuorumXResult` includes the final answer, instability flag, agreement score, token accounting, and the per-agent benchmark snapshot. For configuration details, personas, and telemetry hooks, see [docs/quorumx-config.md](docs/quorumx-config.md).
+
+## HTTP Gateway
+
+Run the QuorumX HTTP gateway with:
+
+```bash
+python -m quorumx.http
+```
+
+The gateway exposes:
+
+- `POST /v1/quorumx`
+- `POST /v1/chat/completions`
+
+A native QuorumX request looks like this:
+
+```json
+{
+  "task": "Review this Python patch for correctness, edge cases, and regressions.",
+  "config": {
+    "n_agents": 3,
+    "max_rounds": 2,
+    "model": "gpt-4o-mini",
+    "quorum_model": "gpt-4o-mini"
+  }
+}
+```
+
+An OpenAI-compatible chat request looks like this:
+
+```json
+{
+  "messages": [
+    {"role": "system", "content": "You are a careful assistant."},
+    {"role": "user", "content": "Draft a concise SDR follow-up email for a prospect who asked about pricing and security."}
+  ],
+  "system_instructions": "Be direct and avoid fluff.",
+  "config": {
+    "n_agents": 3,
+    "max_rounds": 2,
+    "model": "gpt-4o-mini"
+  }
+}
+```
+
+If you send `"stream": true` to `/v1/chat/completions`, the gateway returns SSE with a full-answer chunk and a final `[DONE]` event so OpenAI-style UIs do not hang.
+
+Example response fields:
+
+```json
+{
+  "object": "chat.completion",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "..."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 124,
+    "completion_tokens": 58,
+    "total_tokens": 182
+  },
+  "quorumx": {
+    "unstable": false,
+    "agreement_score": 0.84,
+    "rounds_used": 2
+  }
+}
+```
+
+## MCP Server
+
+Run the QuorumX MCP server with:
+
+```bash
+python -m quorumx.mcp
+```
+
+It exposes the `quorumx.run` tool. If you need to host it inside another process, use `QuorumXMCPServer.run()` or `create_server()` from `quorumx.mcp`.
+
+## Quorum Core
+
+Use Quorum Core directly when you want the lower-level consensus engine without the debate layer.
 
 ```python
 from quorum_core import AgentOutput, resolve_consensus
@@ -16,143 +138,18 @@ print(result.consensus_answer)
 print(result.unstable)
 ```
 
-## HTTP API
+The core HTTP API still lives at `python -m quorum_core.api` with `GET /health` and `POST /resolve`.
 
-POST a JSON body like this to `/resolve`:
+## TypeScript
 
-```json
-{
-  "candidates": [
-    {"id": "a1", "content": "42", "confidence": 0.7},
-    {"id": "a2", "content": "42", "confidence": 0.9}
-  ],
-  "mode": "weighted_majority"
-}
-```
+The existing TypeScript client in `clients/ts` targets the core `/resolve` API.
 
-## TypeScript Client
+For QuorumX, use `createQuorumXClient` from [clients/ts/src/quorumx.ts](clients/ts/src/quorumx.ts) against `/v1/quorumx` or `/v1/chat/completions`.
 
-```ts
-import { createQuorumClient } from "./src/index.js";
+If you need raw streaming support, call `fetch` directly so you can read the SSE response from `/v1/chat/completions` when `"stream": true` is set.
 
-const client = createQuorumClient("http://127.0.0.1:8000");
-const result = await client.resolveConsensus({
-  candidates: [
-    { id: "a1", content: "42", confidence: 0.7 },
-    { id: "a2", content: "42", confidence: 0.9 },
-  ],
-  mode: "quantum_ready",
-});
-```
+## Adapters
 
-## MCP Server
+After you have the QuorumX golden path working, add orchestration-specific wrappers with `quorumx.adapters`.
 
-Start the server with:
-
-```bash
-python -m quorum_mcp.server
-```
-
-It exposes `quorum_consensus` and returns the same JSON result shape as the HTTP API.
-
-## QuorumX
-
-QuorumX is the V2 reasoning trust layer. It runs a small debate across stance-based agents and returns a scored answer with explicit instability handling.
-
-### Python SDK
-
-Use the real backend by default and pass your API key through the config when you want to call a live model:
-
-```python
-import os
-
-from quorumx import QuorumX, QuorumXConfig
-
-config = QuorumXConfig(
-    n_agents=3,
-    max_rounds=2,
-    consensus_mode="quantum_ready",
-    model="gpt-4o-mini",
-    quorum_model="gpt-4o-mini",
-    api_key=os.getenv("OPENAI_API_KEY"),
-)
-
-result = QuorumX(config).run(
-    "Review this Python patch for correctness, edge cases, and regressions."
-)
-
-print(result.answer)
-print(result.unstable)
-```
-
-For offline tests or CI, switch the backend explicitly:
-
-```python
-from quorumx import QuorumX, QuorumXConfig
-
-config = QuorumXConfig(mock_mode=True)
-result = QuorumX(config).run(
-    "Draft a concise SDR follow-up email for a prospect who asked about pricing and security."
-)
-```
-
-### HTTP Gateway
-
-POST a task to `/v1/quorumx` when you want the native QuorumX request shape:
-
-```json
-{
-  "task": "Review this Python patch for correctness, edge cases, and regressions.",
-  "config": {
-    "n_agents": 3,
-    "max_rounds": 2,
-    "model": "gpt-4o-mini",
-    "quorum_model": "gpt-4o-mini"
-  }
-}
-```
-
-POST chat messages to `/v1/chat/completions` when you want an OpenAI-compatible facade:
-
-```json
-{
-  "messages": [
-    {"role": "system", "content": "You are a careful assistant."},
-    {"role": "user", "content": "Draft a concise SDR follow-up email for a prospect who asked about pricing and security."}
-  ],
-  "config": {
-    "n_agents": 3,
-    "max_rounds": 2,
-    "model": "gpt-4o-mini"
-  }
-}
-```
-
-### MCP Server
-
-Start the QuorumX MCP server with:
-
-```bash
-python -m quorumx.mcp
-```
-
-It exposes the `quorumx.run` tool and returns the structured QuorumX result payload.
-
-### Model Selection
-
-- `model` is the primary debate model.
-- `quorum_model` is the synthesis model used by the gateway path when you want a cheaper or smaller final-step model.
-- If `quorum_model` is omitted, QuorumX falls back to `model`.
-- Use `backend="mock"` only for tests, demos, or explicit offline runs.
-- `request_timeout_seconds` controls how long the real backend waits before failing fast.
-
-### Telemetry Hooks
-
-The HTTP gateway and MCP server accept an optional telemetry callable for logging or metrics.
-
-Pass a function shaped like `def hook(event: str, payload: dict[str, Any]) -> None` to:
-
-- `resolve_quorumx_payload(..., telemetry=hook)`
-- `chat_completions_payload(..., telemetry=hook)`
-- `create_server(..., telemetry=hook)`
-- `QuorumXMCPServer(telemetry=hook)`
+Use the adapter helpers for LangChain, LangGraph, CrewAI, AutoGen, and OpenClaw-style runtimes when you want to keep the framework logic outside QuorumX and only normalize candidate outputs at the edge.

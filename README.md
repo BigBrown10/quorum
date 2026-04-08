@@ -2,52 +2,52 @@
 
 Quorum is a consensus engine for distributed agent systems with a quantum-ready optimization path.
 
-This repository currently contains:
+## Who Should Use What
 
-- Core data models for agent outputs and consensus results
-- Baseline consensus modes for simple and confidence-weighted majority voting
-- Graph/QUBO consensus with exact classical solving for small problems
-- Semantic text embeddings with TF-IDF default similarity and an optional local SentenceTransformer backend
-- QuorumX package scaffold with a mock debate loop, config models, and a decorator API
-- Optional quantum backends for Qiskit and D-Wave via environment selection
-- A thin HTTP JSON API wrapper over the core
-- A minimal MCP server that exposes `quorum_consensus`
-- A TypeScript client for the HTTP API
-- A result shape that can mark unstable outcomes explicitly
+Use QuorumX if you want a reasoning trust layer in front of an LLM or multi-agent system. It is the developer-facing V2 surface: Python SDK, HTTP gateway, MCP tool, and adapter helpers.
 
-## Status
+Use Quorum Core directly if you are building custom consensus algorithms, research tooling, or a lower-level consensus primitive.
 
-The Python core, HTTP API, TypeScript client, and MCP server are in place. The consensus engine supports classical and quantum-ready optimization paths, with TF-IDF text embeddings by default, an optional local SentenceTransformer backend, and optional Qiskit and D-Wave backends selected at runtime. QuorumX now has a real-mode-first SDK, a mock backend for CI and offline use, and HTTP and MCP entry points for agent integrations.
+## Entry Points by Layer
 
-## V2 Direction
-
-Quorum Core is the low-level consensus backend. QuorumX now sits on top as the reasoning trust layer with stance-based multi-agent debate, sparse disagreement summaries, a Python SDK, adapter helpers, an HTTP gateway, and an MCP server. Framework-specific adapters and usage examples are the next layer of work.
-
-See [docs/v2-vision.md](docs/v2-vision.md) for the research basis, mini-PRD, and integration notes, and [docs/quorumx-implementation-plan.md](docs/quorumx-implementation-plan.md) for the build checklist.
+| Layer | Python | HTTP | MCP | TypeScript |
+| --- | --- | --- | --- | --- |
+| Core | `from quorum_core import resolve_consensus, AgentOutput, ConsensusResult` | `python -m quorum_core.api` -> `/health`, `/resolve` | `python -m quorum_mcp.server` -> `quorum_consensus` | `clients/ts` core client for `/resolve` |
+| QuorumX | `from quorumx import QuorumX, quorum_x, QuorumXConfig` | `python -m quorumx.http` or `create_server()` -> `/v1/quorumx`, `/v1/chat/completions` | `python -m quorumx.mcp` or `QuorumXMCPServer.run()` -> `quorumx.run` | `clients/ts/src/quorumx.ts` helper for QuorumX endpoints |
 
 ## QuorumX
 
-QuorumX exposes two primary entry points:
-
-- `POST /v1/quorumx` for the native QuorumX request format
-- `POST /v1/chat/completions` for OpenAI-compatible chat completion calls that route through QuorumX
-
-The default `QuorumXConfig` path is real-backend oriented. Use `backend="mock"` only for tests, demos, or offline runs.
+QuorumX runs stance-based multi-agent debate on top of Quorum Core. It preserves the full message history, accepts `system_instructions`, and returns a scored answer with explicit instability handling.
 
 ```python
 import os
 
-from quorumx import QuorumX, QuorumXConfig, run_langchain_consensus
+from quorumx import QuorumX, QuorumXConfig
 
-config = QuorumXConfig(api_key=os.getenv("OPENAI_API_KEY"))
-result = QuorumX(config).run("Review this patch for correctness and regressions.")
+config = QuorumXConfig(
+    n_agents=3,
+    max_rounds=2,
+    consensus_mode="quantum_ready",
+    api_key=os.getenv("OPENAI_API_KEY"),
+)
 
-consensus = run_langchain_consensus([
-    {"content": "Ship the patch"},
-    {"content": "Ship the patch"},
-    {"content": "Add tests first"},
-])
+result = QuorumX(config).run(
+    "Review this patch for correctness and regressions.",
+    messages=[
+        {"role": "system", "content": "You are a careful reviewer."},
+        {"role": "user", "content": "Focus on correctness, edge cases, and tests."},
+    ],
+    system_instructions="Be concise and concrete.",
+)
+
+print(result.answer)
+print(result.unstable)
+print(result.agreement_score)
 ```
+
+Use `backend="mock"` only for tests, demos, or offline runs. See [docs/quorumx-config.md](docs/quorumx-config.md) for config, persona, and telemetry details.
+
+See [docs/v2-vision.md](docs/v2-vision.md) for the research basis and [docs/quorumx-implementation-plan.md](docs/quorumx-implementation-plan.md) for the historical V2 checklist.
 
 ## Local API
 
@@ -115,7 +115,9 @@ The quantum path maps consensus to a QUBO objective and can use Qiskit or D-Wave
 
 ## TypeScript Client
 
-The TypeScript client lives in `clients/ts` and calls the same HTTP API contract exposed by the Python core.
+The TypeScript client in `clients/ts` still targets the core `/resolve` API.
+
+For QuorumX, use `createQuorumXClient` from [clients/ts/src/quorumx.ts](clients/ts/src/quorumx.ts) against `/v1/quorumx` or `/v1/chat/completions`. The helper is JSON-first; if you need `stream=true`, call `fetch` directly so you can consume the SSE response.
 
 ## Release Checklist
 

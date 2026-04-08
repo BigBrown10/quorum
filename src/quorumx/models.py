@@ -15,6 +15,27 @@ VALID_CONSENSUS_MODES: set[str] = {
 
 
 @dataclass(slots=True)
+class QuorumXUsage:
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.prompt_tokens < 0:
+            raise ValueError("prompt_tokens must be non-negative")
+        if self.completion_tokens < 0:
+            raise ValueError("completion_tokens must be non-negative")
+
+        self.total_tokens = self.prompt_tokens + self.completion_tokens
+
+
+@dataclass(slots=True)
+class QuorumXBackendResult:
+    text: str
+    usage: QuorumXUsage
+
+
+@dataclass(slots=True)
 class QuorumXConfig:
     n_agents: int = 3
     max_rounds: int = 2
@@ -90,6 +111,8 @@ class QuorumXResult:
     unstable: bool
     rounds_used: int
     total_tokens: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     tokens_per_round: list[int] = field(default_factory=list)
     benchmark: list[AgentBenchmark] = field(default_factory=list)
     disagreement_edges_final: list[DisagreementEdge] = field(default_factory=list)

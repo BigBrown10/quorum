@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import wraps
@@ -15,6 +16,8 @@ from .backends import (
 )
 from .models import AgentBenchmark, QuorumXConfig, QuorumXResult
 from .personas import PersonaSpec, select_personas
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -69,25 +72,24 @@ class QuorumX:
         if not cleaned_task:
             raise ValueError("task must not be empty")
 
+        effective_system_instructions = system_instructions or self.config.system_instructions
         benchmark_state = {
             persona.name: _BenchmarkAccumulator(stance=persona.name)
             for persona in self.personas
         }
         tokens_per_round: list[int] = []
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
         last_result = None
         disagreement_summary = ""
-        conversation_messages = _build_base_messages(
-            cleaned_task,
-            messages=messages,
-            system_instructions=system_instructions or self.config.system_instructions,
-        )
+        conversation_messages = _build_conversation_messages(cleaned_task, messages=messages)
 
         for round_index in range(self.config.max_rounds):
             candidates: list[AgentOutput] = []
             round_tokens = 0
 
             with ThreadPoolExecutor(max_workers=max(1, len(self.personas))) as executor:
-                round_inputs: list[tuple[PersonaSpec, list[dict[str, Any]], int]] = []
+                round_inputs: list[tuple[PersonaSpec, list[dict[str, Any]]]] = []
                 futures = []
 
                 for persona in self.personas:
@@ -98,9 +100,9 @@ class QuorumX:
                         round_index=round_index,
                         disagreement_summary=disagreement_summary,
                         config=self.config,
+                        system_instructions=effective_system_instructions,
                     )
-                    prompt_tokens = _count_tokens_from_messages(prompt_messages)
-                    round_inputs.append((persona, prompt_messages, prompt_tokens))
+                    round_inputs.append((persona, prompt_messages))
                     futures.append(
                         executor.submit(
                             self.backend.generate,
@@ -109,29 +111,34 @@ class QuorumX:
                         )
                     )
 
-                for (persona, prompt_messages, prompt_tokens), future in zip(
+                for (persona, prompt_messages), future in zip(
                     round_inputs,
                     futures,
                     strict=True,
                 ):
                     try:
-                        raw_response = future.result()
+                        backend_result = future.result()
                     except Exception as exc:
-                        return self._backend_error_result(
-                            task=cleaned_task,
-                            error=exc,
-                            tokens_per_round=tokens_per_round,
-                            benchmark_state=benchmark_state,
-                            round_tokens=round_tokens,
+                        LOGGER.warning(
+                            "QuorumX agent failure persona=%s round=%s error_type=%s error=%s",
+                            persona.name,
+                            round_index + 1,
+                            type(exc).__name__,
+                            exc,
+                            exc_info=True,
                         )
+                        continue
 
                     answer = _truncate_to_token_cap(
-                        raw_response,
+                        backend_result.text,
                         self.config.token_cap_per_agent_round,
                     )
-                    response_tokens = _token_count(answer)
-                    total_tokens = prompt_tokens + response_tokens
+                    prompt_tokens = backend_result.usage.prompt_tokens
+                    completion_tokens = backend_result.usage.completion_tokens
+                    total_tokens = backend_result.usage.total_tokens
                     round_tokens += total_tokens
+                    total_prompt_tokens += prompt_tokens
+                    total_completion_tokens += completion_tokens
 
                     confidence = _estimate_confidence(
                         persona,
@@ -148,11 +155,23 @@ class QuorumX:
                             "round": round_index + 1,
                             "message_count": len(prompt_messages),
                             "prompt_tokens": prompt_tokens,
-                            "response_tokens": response_tokens,
+                            "completion_tokens": completion_tokens,
+                            "response_tokens": completion_tokens,
+                            "total_tokens": total_tokens,
                         },
                     )
                     candidates.append(candidate)
                     benchmark_state[persona.name].record(answer, total_tokens, confidence)
+
+            if not candidates:
+                return self._backend_error_result(
+                    task=cleaned_task,
+                    error=RuntimeError(f"all agents failed in round {round_index + 1}"),
+                    tokens_per_round=tokens_per_round,
+                    benchmark_state=benchmark_state,
+                    prompt_tokens=total_prompt_tokens,
+                    completion_tokens=total_completion_tokens,
+                )
 
             last_result = resolve_consensus(
                 candidates,
@@ -178,7 +197,9 @@ class QuorumX:
             agreement_score=last_result.agreement_score,
             unstable=last_result.unstable,
             rounds_used=len(tokens_per_round),
-            total_tokens=sum(tokens_per_round),
+            total_tokens=total_prompt_tokens + total_completion_tokens,
+            prompt_tokens=total_prompt_tokens,
+            completion_tokens=total_completion_tokens,
             tokens_per_round=tokens_per_round,
             benchmark=benchmark,
             disagreement_edges_final=last_result.disagreement_edges,
@@ -234,20 +255,22 @@ class QuorumX:
         error: Exception,
         tokens_per_round: list[int],
         benchmark_state: dict[str, _BenchmarkAccumulator],
-        round_tokens: int,
+        prompt_tokens: int,
+        completion_tokens: int,
     ) -> QuorumXResult:
         snapshots = [
             accumulator.snapshot(f"{persona.name}_agent")
             for persona, accumulator in zip(self.personas, benchmark_state.values(), strict=False)
         ]
-        all_tokens = tokens_per_round + ([round_tokens] if round_tokens else [])
         return QuorumXResult(
             answer="NO CONSENSUS",
             agreement_score=0.0,
             unstable=True,
             rounds_used=max(1, len(tokens_per_round) + 1),
-            total_tokens=sum(all_tokens),
-            tokens_per_round=all_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            tokens_per_round=list(tokens_per_round),
             benchmark=snapshots,
             disagreement_edges_final=[],
             selected_agent_ids=[],
@@ -275,43 +298,19 @@ def quorum_x(
     return decorator
 
 
-def _build_prompt(
-    task: str,
-    persona: PersonaSpec,
-    disagreement_summary: str,
-    round_index: int,
-    config: QuorumXConfig,
-) -> str:
-    prompt_lines = [
-        f"Persona: {persona.name}",
-        f"Round: {round_index + 1}/{config.max_rounds}",
-        f"Task: {task}",
-    ]
-    if disagreement_summary:
-        prompt_lines.append(f"Disagreement summary: {disagreement_summary}")
-    prompt_lines.append(
-        f"Return a concise answer within roughly {config.token_cap_per_agent_round} tokens."
-    )
-    return "\n".join(prompt_lines)
-
-
-def _build_base_messages(
+def _build_conversation_messages(
     task: str,
     *,
     messages: Sequence[dict[str, Any]] | None,
-    system_instructions: str | None,
 ) -> list[dict[str, Any]]:
     if messages is None:
-        base_messages: list[dict[str, Any]] = [{"role": "user", "content": task}]
-    else:
-        base_messages = [dict(message) for message in messages if isinstance(message, dict)]
-        if not base_messages:
-            base_messages = [{"role": "user", "content": task}]
+        return [{"role": "user", "content": task}]
 
-    if system_instructions:
-        base_messages = [{"role": "system", "content": system_instructions}, *base_messages]
+    normalized_messages = [dict(message) for message in messages if isinstance(message, dict)]
+    if normalized_messages:
+        return normalized_messages
 
-    return base_messages
+    return [{"role": "user", "content": task}]
 
 
 def _build_round_messages(
@@ -322,11 +321,15 @@ def _build_round_messages(
     round_index: int,
     disagreement_summary: str,
     config: QuorumXConfig,
+    system_instructions: str | None,
 ) -> list[dict[str, Any]]:
-    messages = [
-        {"role": "system", "content": persona.system_prompt},
+    messages: list[dict[str, Any]] = []
+    if system_instructions:
+        messages.append({"role": "system", "content": system_instructions})
+    messages.append({"role": "system", "content": persona.system_prompt})
+    messages.append(
         {
-            "role": "developer",
+            "role": "system",
             "content": _build_round_instruction(
                 task=task,
                 persona=persona,
@@ -334,8 +337,8 @@ def _build_round_messages(
                 disagreement_summary=disagreement_summary,
                 config=config,
             ),
-        },
-    ]
+        }
+    )
     messages.extend(dict(message) for message in conversation_messages)
     return messages
 
@@ -381,9 +384,7 @@ def _build_disagreement_summary(
         right = candidate_lookup.get(edge.target_id)
         if left is None or right is None:
             continue
-        fragments.append(
-            f"{left.id} vs {right.id} (weight {edge.weight:.2f})"
-        )
+        fragments.append(f"{left.id} vs {right.id} (weight {edge.weight:.2f})")
 
     if not fragments:
         return "The previous round showed disagreement, but no edges were retained."
@@ -402,42 +403,11 @@ def _estimate_confidence(
     return max(0.1, min(0.95, confidence))
 
 
-def _token_count(text: str) -> int:
-    return max(1, len(text.split()))
-
-
-def _count_tokens_from_messages(messages: Sequence[dict[str, Any]]) -> int:
-    total = 0
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        total += max(1, len(_message_to_text(message.get("content")).split()))
-    return max(1, total)
-
-
 def _truncate_to_token_cap(text: str, token_cap: int) -> str:
     words = text.split()
     if len(words) <= token_cap:
         return text.strip()
     return " ".join(words[:token_cap]).strip()
-
-
-def _message_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, list):
-        fragments: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                fragments.append(item)
-            elif isinstance(item, dict) and "text" in item:
-                fragments.append(str(item["text"]))
-            else:
-                fragments.append(str(item))
-        return " ".join(fragment for fragment in fragments if fragment).strip()
-
-    return str(content).strip()
 
 
 def _truncate_text(text: str, max_length: int) -> str:

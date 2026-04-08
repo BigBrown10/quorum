@@ -51,6 +51,8 @@ export type QuorumXResult = {
   unstable: boolean;
   rounds_used: number;
   total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
   tokens_per_round: number[];
   benchmark: QuorumXBenchmark[];
   disagreement_edges_final: Array<{ source_id: string; target_id: string; weight: number }>;

@@ -9,6 +9,12 @@ Quorum Core is the consensus backend. QuorumX-style orchestration layers can wra
 
 The same consensus engine can be used with CrewAI, LangGraph, AutoGen, OpenClaw-style setups, and other orchestration frameworks without changing the core API.
 
+## QuorumX First
+
+If QuorumX is the product surface, call it directly through the Python SDK, HTTP gateway, or MCP tool. Keep the orchestration framework outside QuorumX and only use adapters when you need to normalize candidate outputs from another runtime.
+
+The QuorumX config, persona, and telemetry knobs are documented in [docs/quorumx-config.md](docs/quorumx-config.md), and the golden-path usage examples live in [docs/usage.md](docs/usage.md).
+
 ## Integration Pattern
 
 The recommended integration pattern is a thin adapter:

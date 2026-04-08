@@ -30,7 +30,7 @@ from .http import (
     resolve_quorumx_payload,
 )
 from .mcp import MCP_TOOL_NAME, QuorumXMCPServer
-from .models import AgentBenchmark, QuorumXConfig, QuorumXResult
+from .models import AgentBenchmark, QuorumXBackendResult, QuorumXConfig, QuorumXResult, QuorumXUsage
 from .personas import DEFAULT_PERSONAS, PersonaSpec, select_personas
 from .telemetry import TelemetryHook, emit_telemetry
 
@@ -48,10 +48,12 @@ __all__ = [
     "PersonaSpec",
     "QuorumX",
     "QuorumXBackend",
+    "QuorumXBackendResult",
     "QuorumXConfig",
     "QuorumXHTTPRequestHandler",
     "QuorumXMCPServer",
     "QuorumXResult",
+    "QuorumXUsage",
     "chat_completions_payload",
     "create_server",
     "emit_telemetry",

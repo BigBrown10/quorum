@@ -57,6 +57,8 @@ def resolve_quorumx_payload(
             "agreement_score": response["agreement_score"],
             "unstable": response["unstable"],
             "rounds_used": response["rounds_used"],
+            "prompt_tokens": response["prompt_tokens"],
+            "completion_tokens": response["completion_tokens"],
             "total_tokens": response["total_tokens"],
         },
     )
@@ -81,7 +83,9 @@ def chat_completions_payload(
     )
     created = int(time.time())
     model_name = config.quorum_model or config.model
-    prompt_tokens = _count_tokens_from_messages(messages)
+    prompt_tokens = result.prompt_tokens
+    completion_tokens = result.completion_tokens
+    total_tokens = result.total_tokens
 
     response = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -97,8 +101,8 @@ def chat_completions_payload(
         ],
         "usage": {
             "prompt_tokens": prompt_tokens,
-            "completion_tokens": result.total_tokens,
-            "total_tokens": prompt_tokens + result.total_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
         },
         "quorumx": quorumx_result_to_payload(result),
     }
@@ -108,14 +112,23 @@ def chat_completions_payload(
         {
             "model": model_name,
             "prompt_tokens": prompt_tokens,
-            "completion_tokens": result.total_tokens,
-            "total_tokens": prompt_tokens + result.total_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
             "agreement_score": result.agreement_score,
             "unstable": result.unstable,
         },
     )
 
     return response
+
+
+def chat_completions_stream_response(
+    payload: dict[str, Any],
+    *,
+    telemetry: TelemetryHook | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    response = chat_completions_payload(payload, telemetry=telemetry)
+    return response, _chat_completions_stream_events(response)
 
 
 def quorumx_result_to_payload(result: QuorumXResult) -> dict[str, Any]:
@@ -125,6 +138,8 @@ def quorumx_result_to_payload(result: QuorumXResult) -> dict[str, Any]:
         "unstable": result.unstable,
         "rounds_used": result.rounds_used,
         "total_tokens": result.total_tokens,
+        "prompt_tokens": result.prompt_tokens,
+        "completion_tokens": result.completion_tokens,
         "tokens_per_round": result.tokens_per_round,
         "benchmark": [asdict(item) for item in result.benchmark],
         "disagreement_edges_final": [
@@ -147,6 +162,17 @@ class QuorumXHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_sse(self, status: HTTPStatus, events: list[str]) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        for event in events:
+            self.wfile.write(event.encode("utf-8"))
+            self.wfile.flush()
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
@@ -165,10 +191,50 @@ class QuorumXHTTPRequestHandler(BaseHTTPRequestHandler):
 
         try:
             payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            stream_requested = bool(payload.get("stream"))
             if self.path == "/v1/quorumx":
                 response = resolve_quorumx_payload(payload, telemetry=telemetry)
+                LOGGER.info(
+                    "quorumx request path=%s agreement_score=%.3f "
+                    "unstable=%s rounds=%s tokens=%s",
+                    self.path,
+                    response.get("agreement_score", 0.0),
+                    response.get("unstable", False),
+                    response.get("rounds_used", 0),
+                    response.get("total_tokens", 0),
+                )
+                self._send_json(HTTPStatus.OK, response)
+                return
             else:
+                if stream_requested:
+                    response, events = chat_completions_stream_response(
+                        payload,
+                        telemetry=telemetry,
+                    )
+                    LOGGER.info(
+                        "quorumx request path=%s agreement_score=%.3f "
+                        "unstable=%s rounds=%s tokens=%s",
+                        self.path,
+                        response.get("quorumx", {}).get("agreement_score", 0.0),
+                        response.get("quorumx", {}).get("unstable", False),
+                        response.get("quorumx", {}).get("rounds_used", 0),
+                        response.get("quorumx", {}).get("total_tokens", 0),
+                    )
+                    self._send_sse(HTTPStatus.OK, events)
+                    return
+
                 response = chat_completions_payload(payload, telemetry=telemetry)
+                LOGGER.info(
+                    "quorumx request path=%s agreement_score=%.3f "
+                    "unstable=%s rounds=%s tokens=%s",
+                    self.path,
+                    response.get("quorumx", {}).get("agreement_score", 0.0),
+                    response.get("quorumx", {}).get("unstable", False),
+                    response.get("quorumx", {}).get("rounds_used", 0),
+                    response.get("quorumx", {}).get("total_tokens", 0),
+                )
+                self._send_json(HTTPStatus.OK, response)
+                return
         except (json.JSONDecodeError, UnicodeDecodeError):
             emit_telemetry(
                 telemetry,
@@ -200,16 +266,6 @@ class QuorumXHTTPRequestHandler(BaseHTTPRequestHandler):
                 {"error": "internal_error", "detail": str(exc)},
             )
             return
-
-        LOGGER.info(
-            "quorumx request path=%s agreement_score=%.3f unstable=%s rounds=%s tokens=%s",
-            self.path,
-            response.get("agreement_score", 0.0),
-            response.get("unstable", False),
-            response.get("rounds_used", 0),
-            response.get("total_tokens", 0),
-        )
-        self._send_json(HTTPStatus.OK, response)
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
@@ -316,10 +372,37 @@ def _message_to_text(content: Any) -> str:
     return str(content).strip()
 
 
-def _count_tokens_from_messages(messages: list[Any]) -> int:
-    total = 0
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        total += max(1, len(_message_to_text(message.get("content")).split()))
-    return max(1, total)
+def _chat_completions_stream_events(response: dict[str, Any]) -> list[str]:
+    message = response.get("choices", [{}])[0].get("message", {})
+    content = str(message.get("content", ""))
+    base_chunk = {
+        "id": response.get("id"),
+        "object": "chat.completion.chunk",
+        "created": response.get("created"),
+        "model": response.get("model"),
+    }
+    first_chunk = {
+        **base_chunk,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": content},
+                "finish_reason": None,
+            }
+        ],
+    }
+    final_chunk = {
+        **base_chunk,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    return [
+        f"data: {json.dumps(first_chunk, ensure_ascii=False)}\n\n",
+        f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n",
+        "data: [DONE]\n\n",
+    ]

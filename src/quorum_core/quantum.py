@@ -23,7 +23,10 @@ class QiskitOptimizer(Optimizer):
     def solve(self, problem: OptimizationProblem) -> OptimizationSolution:
         try:
             from qiskit_aer.primitives import Sampler
-            from qiskit_algorithms import QAOA
+            try:
+                from qiskit_algorithms.minimum_eigensolvers import QAOA
+            except ImportError:  # pragma: no cover - compatibility path
+                from qiskit_algorithms import QAOA
             from qiskit_optimization.algorithms import MinimumEigenOptimizer
         except Exception as exc:  # pragma: no cover - optional dependency path
             raise QuantumBackendUnavailableError("qiskit", str(exc)) from exc
@@ -54,8 +57,14 @@ class DWaveOptimizer(Optimizer):
         linear, quadratic, offset = _problem_to_bqm(problem)
         bqm = dimod.BinaryQuadraticModel(linear, quadratic, offset, dimod.BINARY)
 
-        sampler = EmbeddingComposite(DWaveSampler())
-        sample_set = sampler.sample(bqm, num_reads=100)
+        try:
+            sampler = EmbeddingComposite(DWaveSampler())
+            sample_set = sampler.sample(bqm, num_reads=100)
+            strategy = "dwave-ocean"
+        except Exception:
+            sampler = _simulated_annealing_sampler()
+            sample_set = sampler.sample(bqm, num_reads=100)
+            strategy = "simulated-annealing"
         best_sample = sample_set.first.sample
         selected_indices = [
             index
@@ -67,7 +76,7 @@ class DWaveOptimizer(Optimizer):
             selected_indices=selected_indices,
             energy=float(sample_set.first.energy),
             metadata={
-                "strategy": "dwave-ocean",
+                "strategy": strategy,
                 "num_reads": 100,
             },
         )
@@ -141,3 +150,15 @@ def _problem_to_bqm(problem: OptimizationProblem):
         for (left_index, right_index), cost in problem.pairwise_costs.items()
     }
     return linear, quadratic, 0.0
+
+
+def _simulated_annealing_sampler():
+    try:
+        from dimod.reference.samplers import SimulatedAnnealingSampler
+    except Exception:  # pragma: no cover - compatibility path
+        try:
+            from neal import SimulatedAnnealingSampler
+        except Exception as exc:  # pragma: no cover - optional dependency path
+            raise QuantumBackendUnavailableError("dwave", str(exc)) from exc
+
+    return SimulatedAnnealingSampler()

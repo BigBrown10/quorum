@@ -263,21 +263,31 @@ def consensus_cluster_from_indices(
         if norm > 0:
             centroid_embedding = (centroid / norm).tolist()
 
-    first_candidate = selected_candidates[0]
-    if all(
-        _normalize_content(candidate.content)
-        == _normalize_content(first_candidate.content)
-        for candidate in selected_candidates
-    ):
-        consensus_content: Any = first_candidate.content
-    else:
-        consensus_content = first_candidate.content
+    representative_index = 0
+    representative_key: tuple[float, float, int] | None = None
+    for relative_index, candidate in enumerate(selected_candidates):
+        confidence = _candidate_confidence(candidate)
+        centroid_similarity = 0.0
+        if centroid_embedding is not None and candidate.embedding is not None:
+            centroid_similarity = cosine_similarity(candidate.embedding, centroid_embedding)
+
+        candidate_key = (
+            confidence,
+            centroid_similarity,
+            -selected_indices[relative_index],
+        )
+        if representative_key is None or candidate_key > representative_key:
+            representative_key = candidate_key
+            representative_index = relative_index
+
+    representative_candidate = selected_candidates[representative_index]
+    consensus_content: Any = representative_candidate.content
 
     average_confidence = sum(
         _candidate_confidence(candidate) for candidate in selected_candidates
     ) / len(selected_candidates)
     return ConsensusCluster(
-        cluster_id=f"cluster_{selected_indices[0]}",
+        cluster_id=f"cluster_{selected_indices[representative_index]}",
         agent_ids=[candidate.id for candidate in selected_candidates],
         consensus_content=consensus_content,
         agreement_score=average_confidence,

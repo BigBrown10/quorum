@@ -67,6 +67,12 @@ class GreedyOptimizer(Optimizer):
 
     def _solve_local_search(self, problem: OptimizationProblem) -> tuple[list[int], float]:
         selected_indices = [index for index, cost in enumerate(problem.unary_costs) if cost <= 0]
+        if not selected_indices and problem.unary_costs:
+            seed_index = min(
+                range(len(problem.unary_costs)),
+                key=problem.unary_costs.__getitem__,
+            )
+            selected_indices = [seed_index]
         energy = self._energy(selected_indices, problem)
 
         improved = True
@@ -75,7 +81,9 @@ class GreedyOptimizer(Optimizer):
             candidate_indices = list(range(len(problem.unary_costs)))
 
             for index in candidate_indices:
-                trial = [candidate for candidate in selected_indices if candidate != index]
+                if index in selected_indices:
+                    continue
+                trial = selected_indices + [index]
                 trial_energy = self._energy(trial, problem)
                 if trial_energy < energy:
                     selected_indices = trial
@@ -83,9 +91,7 @@ class GreedyOptimizer(Optimizer):
                     improved = True
 
             for index in candidate_indices:
-                if index in selected_indices:
-                    continue
-                trial = selected_indices + [index]
+                trial = [candidate for candidate in selected_indices if candidate != index]
                 trial_energy = self._energy(trial, problem)
                 if trial_energy < energy:
                     selected_indices = trial

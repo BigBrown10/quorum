@@ -1,6 +1,7 @@
 import pytest
 
 from quorum_core import AgentOutput, resolve_consensus
+from quorum_core.graph import consensus_cluster_from_indices
 
 
 def test_simple_majority_picks_most_common_answer() -> None:
@@ -94,3 +95,16 @@ def test_graph_min_cut_uses_distinct_mode_and_configurable_threshold() -> None:
     assert stable_result.mode == "graph_min_cut"
     assert stable_result.disagreement_edges
     assert strict_result.unstable is True
+
+
+def test_consensus_cluster_uses_highest_confidence_representative() -> None:
+    candidates = [
+        AgentOutput(id="a1", content="first option", confidence=0.2),
+        AgentOutput(id="a2", content="preferred option", confidence=0.9),
+        AgentOutput(id="a3", content="third option", confidence=0.4),
+    ]
+
+    cluster = consensus_cluster_from_indices(candidates, [0, 1, 2])
+
+    assert cluster.consensus_content == "preferred option"
+    assert cluster.cluster_id == "cluster_1"

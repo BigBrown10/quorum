@@ -47,7 +47,7 @@ print(result.agreement_score)
 
 Use `backend="mock"` only for tests, demos, or offline runs. See [docs/quorumx-config.md](docs/quorumx-config.md) for config, persona, and telemetry details.
 
-See [docs/v2-vision.md](docs/v2-vision.md) for the research basis and [docs/quorumx-implementation-plan.md](docs/quorumx-implementation-plan.md) for the historical V2 checklist.
+See [docs/v2-vision.md](docs/v2-vision.md) for the research basis.
 
 ## Local API
 
